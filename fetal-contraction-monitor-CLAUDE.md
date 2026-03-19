@@ -21,6 +21,17 @@ Recovery time diverges from normal 60 minutes before deceleration depth does. Th
 - **Testing:** Jest + React Native Testing Library
 - **Navigation:** `expo-router` (file-based routing)
 
+## Critical Discovery: Fixed vs Adaptive Normalization
+
+Found during the cardiac dance monitor build: **torus feature computation for matching against validated thresholds requires fixed normalization bounds, not adaptive percentile-based normalization.** When angle mapping uses the individual session's narrow range (adaptive), κ and Gini shift to values that don't match the research-validated thresholds. The validated results (Paper V) used population-wide bounds.
+
+**Rule:**
+- **Alert logic / trajectory features** → fixed normalization (NADIR_MAP_MIN/MAX, RECOVERY_MAP_MIN/MAX constants)
+- **Torus visualization** → adaptive normalization (2nd–98th percentile of session data) for better visual spread
+- **Personal baseline deviation** → either works (relative to personal baseline)
+
+The `toAngle` function accepts `min`/`max` parameters. The caller decides which bounds to pass. Do not hardcode either strategy inside the engine.
+
 ## Architecture Principles
 
 1. **All computation is local.** Zero cloud. Zero network. Zero data leaves the device unless the user explicitly exports.
