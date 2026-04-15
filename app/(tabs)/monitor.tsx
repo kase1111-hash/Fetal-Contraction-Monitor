@@ -1,17 +1,21 @@
 /**
  * Monitor screen — the main view during labor.
  *
- * Layout (top to bottom, per SPEC.md §6 "Main Monitor Screen Layout"):
+ * Layout (top to bottom, per SPEC.md §6):
  *   1. Status light
  *   2. Stats row: Phase | CTX count | Last nadir | Last recovery
  *   3. Torus display
  *   4. Recovery trend chart
  *   5. Last-contraction info
  *   6. Control bar: Start/Stop + Contraction button
+ *
+ * Phase 2: haptics on status transitions (SPEC.md §5.2), personal-baseline
+ * indicator once established.
  */
 
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import * as Haptics from 'expo-haptics';
 
 import { StatusLight } from '../../src/display/StatusLight';
 import { TorusDisplay } from '../../src/display/TorusDisplay';
@@ -20,7 +24,7 @@ import { ContractionButton } from '../../src/display/ContractionButton';
 import { SignalQualityBadge } from '../../src/display/SignalQualityBadge';
 import { useSession } from '../../src/state/session-context';
 import { computeTrajectory } from '../../src/torus/map-point';
-import type { ContractionResponse } from '../../src/types';
+import type { AlertStatus, ContractionResponse } from '../../src/types';
 
 function formatTimeElapsed(startMs: number, nowMs: number): string {
   const mins = Math.floor((nowMs - startMs) / 60_000);
@@ -28,14 +32,39 @@ function formatTimeElapsed(startMs: number, nowMs: number): string {
   return `${Math.floor(mins / 60)}h ${mins % 60}m`;
 }
 
+function useStatusHaptics(status: AlertStatus): void {
+  const last = useRef<AlertStatus>('grey');
+  useEffect(() => {
+    if (status === last.current) return;
+    last.current = status;
+    // Per SPEC.md §5.2:
+    //   yellow → single vibration
+    //   red    → 3 vibrations
+    //   others → none
+    if (status === 'yellow') {
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    } else if (status === 'red') {
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      // Two more pulses for the "3 vibrations" spec behavior.
+      setTimeout(() => void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy), 180);
+      setTimeout(() => void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy), 360);
+    }
+  }, [status]);
+}
+
 export default function MonitorScreen(): React.ReactElement {
-  const { session, latestSample, pendingCount, startSession, endSession, recordDetection } =
-    useSession();
+  const {
+    session,
+    latestSample,
+    pendingCount,
+    startSession,
+    endSession,
+    recordDetection,
+  } = useSession();
 
   const contractions = session?.contractions ?? [];
   const last: ContractionResponse | undefined = contractions[contractions.length - 1];
 
-  // Torus trajectory for visualization: adaptive bounds once we have enough data.
   const pts = useMemo(() => computeTrajectory(contractions, 'auto'), [contractions]);
 
   const signalQuality = latestSample
@@ -44,13 +73,27 @@ export default function MonitorScreen(): React.ReactElement {
       : 'poor'
     : 'disconnected';
 
-  const status = session?.status ?? 'grey';
+  const status: AlertStatus = session?.status ?? 'grey';
+  useStatusHaptics(status);
 
   return (
     <ScrollView style={styles.root} contentContainerStyle={styles.content}>
       <View style={styles.topRow}>
         <StatusLight status={status} size={72} />
-        <View style={{ flex: 1 }} />
+        <View style={styles.topInfo}>
+          <Text style={styles.statusLabel}>
+            {status === 'grey' && 'Collecting data'}
+            {status === 'green' && 'Reassuring'}
+            {status === 'yellow' && 'Concerning'}
+            {status === 'red' && 'Alert — contact your provider'}
+          </Text>
+          {session?.personalBaseline && (
+            <Text style={styles.baselineInfo}>
+              Baseline: recovery {session.personalBaseline.recoveryMean.toFixed(0)}±
+              {session.personalBaseline.recoverySd.toFixed(1)} s (frozen)
+            </Text>
+          )}
+        </View>
         <SignalQualityBadge quality={signalQuality} />
       </View>
 
@@ -152,13 +195,11 @@ function SecondaryButton({ label, onPress }: { label: string; onPress(): void })
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#0a0a0f' },
   content: { padding: 16, alignItems: 'center' },
-  topRow: { flexDirection: 'row', alignItems: 'center', width: '100%' },
-  stats: {
-    flexDirection: 'row',
-    width: '100%',
-    marginTop: 16,
-    gap: 12,
-  },
+  topRow: { flexDirection: 'row', alignItems: 'center', width: '100%', gap: 12 },
+  topInfo: { flex: 1 },
+  statusLabel: { color: '#cfcfd4', fontSize: 14, fontWeight: '600' },
+  baselineInfo: { color: '#9a9aa6', fontSize: 11, marginTop: 2 },
+  stats: { flexDirection: 'row', width: '100%', marginTop: 16, gap: 12 },
   statCell: { flex: 1, alignItems: 'flex-start' },
   statLabel: { color: '#9a9aa6', fontSize: 11, letterSpacing: 0.5 },
   statValue: { color: '#cfcfd4', fontSize: 20, fontWeight: '600', marginTop: 4 },

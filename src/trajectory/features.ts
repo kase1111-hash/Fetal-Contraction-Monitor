@@ -56,12 +56,18 @@ export function computeTrajectoryFeatures(
 /**
  * SPEC.md §4.3: "slope(last third) − slope(first third), requires ≥9 ctx".
  * Returns 0 if too few contractions.
+ *
+ * Sign convention: the computation runs on DEPTH MAGNITUDES (|nadir|), so a
+ * POSITIVE result means nadirs are deepening faster over time (i.e., the
+ * concerning direction). This matches the spec's alert check
+ * `nadirAcceleration > 0` (CLAUDE.md §"Alert Logic").
  */
 export function computeNadirAcceleration(nadirs: readonly number[]): number {
   if (nadirs.length < 9) return 0;
-  const third = Math.floor(nadirs.length / 3);
-  const first = nadirs.slice(0, third);
-  const last = nadirs.slice(-third);
+  const depths = nadirs.map((n) => Math.abs(n));
+  const third = Math.floor(depths.length / 3);
+  const first = depths.slice(0, third);
+  const last = depths.slice(-third);
   return olsSlope(last) - olsSlope(first);
 }
 

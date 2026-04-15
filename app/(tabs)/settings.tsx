@@ -10,6 +10,7 @@ import React, { useState } from 'react';
 import { Pressable, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
 
 import { sessionToCsv } from '../../src/export/csv';
+import { exportSessionPdf } from '../../src/export/pdf';
 import {
   scenarioParams,
   generateFhrStream,
@@ -32,6 +33,20 @@ export default function SettingsScreen(): React.ReactElement {
       setNote('Export opened in share sheet.');
     } catch {
       setNote('Export failed.');
+    }
+  }
+
+  async function exportPdf(): Promise<void> {
+    if (session === null || session.contractions.length === 0) {
+      setNote('No contractions to export yet.');
+      return;
+    }
+    try {
+      const { uri } = await exportSessionPdf(session);
+      await Share.share({ url: uri, title: `session-${session.id}.pdf` });
+      setNote('PDF opened in share sheet.');
+    } catch {
+      setNote('PDF export failed.');
     }
   }
 
@@ -60,6 +75,7 @@ export default function SettingsScreen(): React.ReactElement {
 
       <Section title="Export">
         <Row label="CSV (current session)" onPress={exportCsv} />
+        <Row label="PDF (one-page summary)" onPress={exportPdf} />
       </Section>
 
       <Section title="Simulation">

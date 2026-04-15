@@ -46,8 +46,9 @@ export function scenarioParams(
     case 'normal':
       return {
         baseline: 140,
-        nadirDrop: 10 + 20 * frac, // -10 → -30
-        recoveryTime: 28 + 7 * frac, // 28 → 35
+        nadirDrop: 10 + 20 * frac, // -10 → -30 (gradual deepening per SPEC)
+        // "Stable 28–35s recovery" → oscillate in band, no trend.
+        recoveryTime: 31 + 3 * Math.sin(k * 1.3),
       };
     case 'concerning':
       return {

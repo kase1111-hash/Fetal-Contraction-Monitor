@@ -88,13 +88,15 @@ describe('computeNadirAcceleration', () => {
     expect(computeNadirAcceleration(xs)).toBeCloseTo(0, 8);
   });
 
-  test('accelerating deepening → negative acceleration', () => {
+  test('accelerating deepening → positive acceleration (on depth magnitudes)', () => {
     // First third stable, last third dropping fast. Nadirs get more negative.
+    // With the depth-magnitude convention, acceleration is POSITIVE here.
     const xs = [
-      -10, -10, -10, -10, // first third flat
+      -10, -10, -10, -10, // first third flat → slope ≈ 0
       -11, -13, -15, -17, // middle decelerates
-      -20, -26, -35, -45, // last third steepens
+      -20, -26, -35, -45, // last third depths grow faster → positive slope
     ];
-    expect(computeNadirAcceleration(xs)).toBeLessThan(0);
+    expect(computeNadirAcceleration(xs)).toBeGreaterThan(0);
   });
+
 });
