@@ -13,6 +13,7 @@
 import React, { useState } from 'react';
 import { Alert, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { LAST5_RED, LAST5_YELLOW } from '../constants';
+import { FHRResponseCurve } from './FHRResponseCurve';
 import type { ContractionResponse, ResponseQuality } from '../types';
 
 const QUALITY_ICON: Record<ResponseQuality, string> = {
@@ -115,6 +116,7 @@ export function ContractionLog({
                 <DetailRow label="Nadir timing" value={`${item.nadirTiming.toFixed(1)} s`} />
                 <DetailRow label="Response area" value={`${item.responseArea.toFixed(0)} bpm·s`} />
                 <DetailRow label="FHR quality" value={`${(item.fhrQuality * 100).toFixed(0)}%`} />
+                <FHRResponseCurve contraction={item} />
                 <Text style={styles.hint}>Long-press row to delete</Text>
               </View>
             )}

@@ -8,6 +8,7 @@
 
 import React, { useState } from 'react';
 import { Pressable, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
+import { Link } from 'expo-router';
 
 import { sessionToCsv } from '../../src/export/csv';
 import { exportSessionPdf } from '../../src/export/pdf';
@@ -71,6 +72,15 @@ export default function SettingsScreen(): React.ReactElement {
           Connect a Bluetooth fetal Doppler from the Monitor screen. BLE pairing
           requires on-device permission; scan support appears there when ready.
         </Text>
+      </Section>
+
+      <Section title="Past sessions">
+        <Link href="/session" asChild>
+          <Pressable style={styles.row}>
+            <Text style={styles.rowLabel}>View history</Text>
+            <Text style={styles.chevron}>›</Text>
+          </Pressable>
+        </Link>
       </Section>
 
       <Section title="Export">

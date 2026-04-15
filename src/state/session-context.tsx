@@ -54,6 +54,9 @@ export interface SessionContextValue {
   updateContraction(id: string, patch: Partial<ContractionResponse>): void;
   /** Insert a manual contraction at a user-chosen time (long-press timeline). */
   insertContractionAt(peakMs: number): void;
+
+  /** Load completed sessions from storage. Returns newest-first. */
+  loadHistory(): Promise<LaborSession[]>;
 }
 
 const Context = createContext<SessionContextValue | null>(null);
@@ -180,6 +183,10 @@ export function SessionProvider({
     [clock],
   );
 
+  const loadHistory = useCallback(async () => {
+    return store.loadHistory();
+  }, [store]);
+
   const insertContractionAt = useCallback(
     (peakMs: number) => {
       // Manual insert: enqueue as a manual detection at the chosen time.
@@ -214,6 +221,7 @@ export function SessionProvider({
     deleteContraction,
     updateContraction,
     insertContractionAt,
+    loadHistory,
   };
 
   return <Context.Provider value={value}>{children}</Context.Provider>;

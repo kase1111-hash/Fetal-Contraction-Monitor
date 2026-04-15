@@ -8,21 +8,26 @@
  *   - Polyline connecting consecutive points (low opacity)
  *   - Circles at each point: radius + opacity scale with recency;
  *     color scales with curvature (green low → red high)
- *   - Latest point: pulsing white ring (static here; animation deferred)
+ *   - Latest point: animated pulsing white ring
+ *   - Tap a point to show its contraction details in a tooltip
+ *     (Phase 3, SPEC §6.1 "Interaction")
  */
 
-import React from 'react';
-import { View } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { Animated, Easing, Pressable, StyleSheet, Text, View } from 'react-native';
 import Svg, { Circle, G, Line, Polyline, Rect } from 'react-native-svg';
 import { TWO_PI } from '../torus/math';
-import type { TorusPoint } from '../types';
+import type { ContractionResponse, TorusPoint } from '../types';
+
+const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 
 export interface TorusDisplayProps {
   points: readonly TorusPoint[];
+  /** Map from contractionId → ContractionResponse for tooltip lookup. */
+  contractionsById?: Readonly<Record<string, ContractionResponse>>;
   size?: number;
 }
 
-/** Color ramp: green at kappa 0 → red at high kappa. Clamps at ~2. */
 function kappaColor(kappa: number): string {
   const t = Math.min(1, kappa / 2);
   const r = Math.round(62 + (235 - 62) * t);
@@ -31,12 +36,47 @@ function kappaColor(kappa: number): string {
   return `rgb(${r},${g},${b})`;
 }
 
-export function TorusDisplay({ points, size = 280 }: TorusDisplayProps): React.ReactElement {
+export function TorusDisplay({
+  points,
+  contractionsById,
+  size = 280,
+}: TorusDisplayProps): React.ReactElement {
   const pad = 10;
   const box = size - 2 * pad;
   const proj = (theta: number) => pad + (theta / TWO_PI) * box;
 
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selected =
+    selectedId && contractionsById ? contractionsById[selectedId] ?? null : null;
+
+  // Pulsing ring on the latest point.
+  const pulse = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, {
+          toValue: 1,
+          duration: 1200,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: false,
+        }),
+        Animated.timing(pulse, {
+          toValue: 0,
+          duration: 1200,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: false,
+        }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [pulse]);
+
   const polyPoints = points.map((p) => `${proj(p.theta1)},${size - proj(p.theta2)}`).join(' ');
+  const latest = points[points.length - 1];
+
+  const pulseR = pulse.interpolate({ inputRange: [0, 1], outputRange: [8, 14] });
+  const pulseOpacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.9, 0.2] });
 
   return (
     <View style={{ width: size, height: size }}>
@@ -66,7 +106,13 @@ export function TorusDisplay({ points, size = 280 }: TorusDisplayProps): React.R
         </G>
 
         {points.length >= 2 && (
-          <Polyline points={polyPoints} fill="none" stroke="#4a4a6b" strokeWidth={1} opacity={0.6} />
+          <Polyline
+            points={polyPoints}
+            fill="none"
+            stroke="#4a4a6b"
+            strokeWidth={1}
+            opacity={0.6}
+          />
         )}
 
         {points.map((p, i) => {
@@ -82,23 +128,78 @@ export function TorusDisplay({ points, size = 280 }: TorusDisplayProps): React.R
               cy={cy}
               r={radius}
               fill={kappaColor(p.kappa)}
-              opacity={opacity}
+              opacity={selectedId === p.contractionId ? 1 : opacity}
+              stroke={selectedId === p.contractionId ? '#ffffff' : 'none'}
+              strokeWidth={selectedId === p.contractionId ? 1.5 : 0}
             />
           );
         })}
 
-        {points.length > 0 && (
-          <Circle
-            cx={proj(points[points.length - 1]!.theta1)}
-            cy={size - proj(points[points.length - 1]!.theta2)}
-            r={8}
+        {latest && (
+          <AnimatedCircle
+            cx={proj(latest.theta1)}
+            cy={size - proj(latest.theta2)}
+            r={pulseR}
             fill="none"
             stroke="#ffffff"
             strokeWidth={1.5}
-            opacity={0.8}
+            opacity={pulseOpacity}
           />
         )}
       </Svg>
+
+      {/* Invisible pressable hit-testing layer over each point. */}
+      {contractionsById && (
+        <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+          {points.map((p) => {
+            const cx = proj(p.theta1);
+            const cy = size - proj(p.theta2);
+            const r = 12; // generous tap target
+            return (
+              <Pressable
+                key={p.contractionId}
+                onPress={() =>
+                  setSelectedId((prev) => (prev === p.contractionId ? null : p.contractionId))
+                }
+                style={[
+                  styles.hit,
+                  { left: cx - r, top: cy - r, width: 2 * r, height: 2 * r },
+                ]}
+              />
+            );
+          })}
+        </View>
+      )}
+
+      {selected && (
+        <View style={styles.tooltip}>
+          <Text style={styles.tooltipTitle}>
+            Contraction · nadir {selected.nadirDepth.toFixed(0)} bpm · recovery{' '}
+            {selected.recoveryTime.toFixed(0)} s
+          </Text>
+          <Text style={styles.tooltipLine}>
+            baseline {selected.baselineFHR.toFixed(0)} bpm · area{' '}
+            {selected.responseArea.toFixed(0)} bpm·s · quality {selected.qualityGrade}
+          </Text>
+        </View>
+      )}
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  hit: { position: 'absolute', borderRadius: 999 },
+  tooltip: {
+    position: 'absolute',
+    left: 8,
+    right: 8,
+    bottom: 8,
+    backgroundColor: '#15151c',
+    borderColor: '#3a3a4f',
+    borderWidth: 1,
+    borderRadius: 6,
+    padding: 8,
+  },
+  tooltipTitle: { color: '#cfcfd4', fontSize: 11, fontWeight: '600' },
+  tooltipLine: { color: '#9a9aa6', fontSize: 10, marginTop: 2 },
+});
