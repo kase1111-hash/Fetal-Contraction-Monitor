@@ -1,0 +1,46 @@
+{
+  "expo": {
+    "name": "Fetal Contraction Monitor",
+    "slug": "fetal-contraction-monitor",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#0a0a0f"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.fetalcontractionmonitor.app",
+      "infoPlist": {
+        "NSBluetoothAlwaysUsageDescription": "Required to connect to a fetal Doppler for heart rate monitoring.",
+        "NSMotionUsageDescription": "Required to detect uterine contractions from the phone's motion sensor."
+      }
+    },
+    "android": {
+      "package": "com.fetalcontractionmonitor.app",
+      "permissions": [
+        "BLUETOOTH",
+        "BLUETOOTH_ADMIN",
+        "BLUETOOTH_CONNECT",
+        "BLUETOOTH_SCAN",
+        "ACCESS_FINE_LOCATION"
+      ]
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "react-native-ble-plx",
+        {
+          "isBackgroundEnabled": false,
+          "modes": ["peripheral", "central"],
+          "bluetoothAlwaysPermission": "Required to connect to a fetal Doppler."
+        }
+      ]
+    ],
+    "scheme": "fcm",
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
