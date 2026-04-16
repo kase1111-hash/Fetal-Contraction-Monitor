@@ -20,7 +20,14 @@ import {
 import { useSession } from '../../src/state/session-context';
 
 export default function SettingsScreen(): React.ReactElement {
-  const { session, startSession, recordDetection, recordFhrSample } = useSession();
+  const {
+    session,
+    startSession,
+    recordDetection,
+    recordFhrSample,
+    studyMode,
+    setStudyMode,
+  } = useSession();
   const [note, setNote] = useState<string | null>(null);
 
   async function exportCsv(): Promise<void> {
@@ -92,6 +99,31 @@ export default function SettingsScreen(): React.ReactElement {
         <Row label="Normal labor" onPress={() => runSimulation('normal')} />
         <Row label="Concerning" onPress={() => runSimulation('concerning')} />
         <Row label="Distress" onPress={() => runSimulation('distress')} />
+      </Section>
+
+      <Section title="Equivalence study">
+        <Pressable
+          onPress={() => {
+            setStudyMode(!studyMode);
+            setNote(
+              studyMode
+                ? 'Study mode off — raw captures discarded from now on.'
+                : 'Study mode on — every FHR sample is being retained.',
+            );
+          }}
+          style={styles.row}
+        >
+          <Text style={styles.rowLabel}>Study mode</Text>
+          <Text style={[styles.rowLabel, { flex: 0, color: studyMode ? '#3ecf75' : '#5a5a66' }]}>
+            {studyMode ? 'ON' : 'OFF'}
+          </Text>
+        </Pressable>
+        <Link href="/study" asChild>
+          <Pressable style={styles.row}>
+            <Text style={styles.rowLabel}>Open study workspace</Text>
+            <Text style={styles.chevron}>›</Text>
+          </Pressable>
+        </Link>
       </Section>
 
       <Section title="About">

@@ -28,6 +28,7 @@ import { ContractionQueue } from './contraction-queue';
 import { sessionReducer } from './session-reducer';
 import { SessionStore } from '../storage/session-store';
 import { MemoryKvStore } from '../storage/kv';
+import { StudyRecorder } from '../study/raw-capture';
 import type { KvStore } from '../storage/kv';
 import type {
   ContractionDetection,
@@ -57,6 +58,15 @@ export interface SessionContextValue {
 
   /** Load completed sessions from storage. Returns newest-first. */
   loadHistory(): Promise<LaborSession[]>;
+
+  // --- Phase 4: study mode ------------------------------------------------
+
+  /** Whether study-mode capture is active (retains raw FHR samples). */
+  studyMode: boolean;
+  /** Turn study mode on/off. Takes effect immediately for new samples. */
+  setStudyMode(on: boolean): void;
+  /** Recorder holding all captured streams (only populated when studyMode=true). */
+  studyRecorder: StudyRecorder;
 }
 
 const Context = createContext<SessionContextValue | null>(null);
@@ -84,8 +94,10 @@ export function SessionProvider({
   const buffer = useRef(new FhrBuffer());
   const queue = useRef(new ContractionQueue());
   const accelDetector = useRef(new AccelDetector());
+  const studyRecorder = useRef(new StudyRecorder());
   /** Timestamps of recent manual detections, for fusion against accel. */
   const manualPeaks = useRef<number[]>([]);
+  const [studyMode, setStudyMode] = useState(false);
 
   const [session, dispatch] = useReducer(sessionReducer, null);
   const [latestSample, setLatestSample] = useState<FHRSample | null>(null);
@@ -141,17 +153,23 @@ export function SessionProvider({
     dispatch({ type: 'end', at: clock() });
   }, [session, store, clock]);
 
-  const recordDetection = useCallback((d: ContractionDetection) => {
-    if (d.method === 'manual') {
-      manualPeaks.current.push(d.peakTimestamp);
-      // Keep only recent peaks (last 10 min).
-      manualPeaks.current = manualPeaks.current.filter(
-        (t) => t > clock() - 10 * 60 * 1000,
-      );
-    }
-    queue.current.enqueue(d);
-    setPendingCount(queue.current.size());
-  }, [clock]);
+  const recordDetection = useCallback(
+    (d: ContractionDetection) => {
+      if (d.method === 'manual') {
+        manualPeaks.current.push(d.peakTimestamp);
+        manualPeaks.current = manualPeaks.current.filter(
+          (t) => t > clock() - 10 * 60 * 1000,
+        );
+      }
+      queue.current.enqueue(d);
+      setPendingCount(queue.current.size());
+      if (studyMode) {
+        studyRecorder.current.open('consumer-doppler', d.peakTimestamp);
+        studyRecorder.current.detect('consumer-doppler', d);
+      }
+    },
+    [clock, studyMode],
+  );
 
   const recordAccelSample = useCallback((s: RawAccelSample) => {
     const detections = accelDetector.current.push(s);
@@ -167,10 +185,17 @@ export function SessionProvider({
     if (detections.length > 0) setPendingCount(queue.current.size());
   }, []);
 
-  const recordFhrSample = useCallback((s: FHRSample) => {
-    buffer.current.push(s);
-    setLatestSample(s);
-  }, []);
+  const recordFhrSample = useCallback(
+    (s: FHRSample) => {
+      buffer.current.push(s);
+      setLatestSample(s);
+      if (studyMode) {
+        studyRecorder.current.open('consumer-doppler', s.timestamp);
+        studyRecorder.current.sample('consumer-doppler', s);
+      }
+    },
+    [studyMode],
+  );
 
   const deleteContraction = useCallback((id: string) => {
     dispatch({ type: 'delete-contraction', id, at: clock() });
@@ -222,6 +247,9 @@ export function SessionProvider({
     updateContraction,
     insertContractionAt,
     loadHistory,
+    studyMode,
+    setStudyMode,
+    studyRecorder: studyRecorder.current,
   };
 
   return <Context.Provider value={value}>{children}</Context.Provider>;
