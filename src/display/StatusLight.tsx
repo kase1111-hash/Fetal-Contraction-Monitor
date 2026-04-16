@@ -7,6 +7,7 @@
 import React from 'react';
 import { View } from 'react-native';
 import Svg, { Circle, Defs, RadialGradient, Stop } from 'react-native-svg';
+import { STATUS_COLORS } from './colors';
 import type { AlertStatus } from '../types';
 
 export interface StatusLightProps {
@@ -14,15 +15,8 @@ export interface StatusLightProps {
   size?: number;
 }
 
-const COLORS: Record<AlertStatus, string> = {
-  green: '#3ecf75',
-  yellow: '#f2c94c',
-  red: '#eb5757',
-  grey: '#5a5a66',
-};
-
 export function StatusLight({ status, size = 64 }: StatusLightProps): React.ReactElement {
-  const color = COLORS[status];
+  const color = STATUS_COLORS[status];
   const r = size / 2 - 2;
   return (
     <View style={{ width: size, height: size }}>

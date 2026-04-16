@@ -2,17 +2,25 @@
  * ContractionLog — scrollable table of contractions, most recent first.
  * Reference: SPEC.md §6.4 + §2.4 "User correction" (delete a false positive).
  *
- * Phase-2 affordances:
+ * Current affordances:
  *   - Tap a row to open a details/edit sheet.
  *   - Long-press a row to delete it (with confirmation).
  *
- * Phase-3 TODO: drag to adjust timing on the timeline view; insert by
- * long-press on timeline (wired into insertContractionAt).
+ * Deferred (see GitHub issues, not inline TODOs):
+ *   - Drag to adjust timing on the timeline view.
+ *   - Long-press on the timeline to insert a missed contraction.
+ *     (insertContractionAt is already wired on the context.)
  */
 
 import React, { useState } from 'react';
 import { Alert, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
-import { LAST5_RED, LAST5_YELLOW } from '../constants';
+import {
+  COLOR_GREEN,
+  COLOR_RED,
+  COLOR_YELLOW,
+  nadirTextColor,
+  recoveryTextColor,
+} from './colors';
 import { FHRResponseCurve } from './FHRResponseCurve';
 import type { ContractionResponse, ResponseQuality } from '../types';
 
@@ -23,20 +31,10 @@ const QUALITY_ICON: Record<ResponseQuality, string> = {
 };
 
 const QUALITY_COLOR: Record<ResponseQuality, string> = {
-  good: '#3ecf75',
-  fair: '#f2c94c',
-  poor: '#eb5757',
+  good: COLOR_GREEN,
+  fair: COLOR_YELLOW,
+  poor: COLOR_RED,
 };
-
-function recoveryColor(r: number): string {
-  if (r >= LAST5_RED) return '#eb5757';
-  if (r >= LAST5_YELLOW) return '#f2c94c';
-  return '#cfcfd4';
-}
-
-function nadirColor(depth: number): string {
-  return depth < -25 ? '#eb5757' : '#cfcfd4';
-}
 
 export interface ContractionLogProps {
   contractions: readonly ContractionResponse[];
@@ -90,11 +88,11 @@ export function ContractionLog({
           >
             <View style={styles.row}>
               <Text style={[styles.cell, styles.mono, { flex: 0.5 }]}>{displayIndex}</Text>
-              <Text style={[styles.cell, styles.mono, { color: nadirColor(item.nadirDepth) }]}>
+              <Text style={[styles.cell, styles.mono, { color: nadirTextColor(item.nadirDepth) }]}>
                 {item.nadirDepth.toFixed(0)} bpm
               </Text>
               <Text
-                style={[styles.cell, styles.mono, { color: recoveryColor(item.recoveryTime) }]}
+                style={[styles.cell, styles.mono, { color: recoveryTextColor(item.recoveryTime) }]}
               >
                 {item.recoveryTime.toFixed(0)} s
               </Text>

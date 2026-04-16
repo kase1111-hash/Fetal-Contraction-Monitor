@@ -12,14 +12,8 @@
 
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+import { STATUS_COLORS } from './colors';
 import type { AlertStatus, StatusTransition } from '../types';
-
-const COLORS: Record<AlertStatus, string> = {
-  green: '#3ecf75',
-  yellow: '#f2c94c',
-  red: '#eb5757',
-  grey: '#5a5a66',
-};
 
 export interface StatusTimelineProps {
   startTime: number;
@@ -68,7 +62,7 @@ export function StatusTimeline({
                 styles.segment,
                 {
                   width: Math.max(2, fracWidth),
-                  backgroundColor: COLORS[s.status],
+                  backgroundColor: STATUS_COLORS[s.status],
                 },
               ]}
             />
@@ -81,9 +75,9 @@ export function StatusTimeline({
         ) : (
           transitions.slice(-4).map((t) => (
             <Text key={`${t.at}-${t.contractionIndex}`} style={styles.item}>
-              <Text style={{ color: COLORS[t.from] }}>{t.from.toUpperCase()}</Text>
+              <Text style={{ color: STATUS_COLORS[t.from] }}>{t.from.toUpperCase()}</Text>
               {' → '}
-              <Text style={{ color: COLORS[t.to] }}>{t.to.toUpperCase()}</Text>
+              <Text style={{ color: STATUS_COLORS[t.to] }}>{t.to.toUpperCase()}</Text>
               <Text style={styles.meta}>  at ctx #{t.contractionIndex + 1}</Text>
             </Text>
           ))
