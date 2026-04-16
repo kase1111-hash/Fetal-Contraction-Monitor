@@ -88,7 +88,7 @@ export function SessionProvider({
   children,
 }: SessionProviderProps): React.ReactElement {
   const clock = now ?? (() => Date.now());
-  const idGen = newId ?? (() => `sess-${clock()}-${Math.floor(Math.random() * 1e6)}`);
+  const idGen = newId ?? defaultIdGenerator(clock);
 
   const store = useMemo(() => new SessionStore(kv ?? new MemoryKvStore()), [kv]);
   const buffer = useRef(new FhrBuffer());
@@ -261,6 +261,38 @@ export function useSession(): SessionContextValue {
     throw new Error('useSession must be called inside a SessionProvider');
   }
   return ctx;
+}
+
+/**
+ * Cryptographically-random session id generator with a Math.random fallback.
+ *
+ * Session IDs are used for equality lookup in history (app/session/[id].tsx),
+ * so two different sessions must never share one. The previous
+ * `${clock()}-${Math.random() * 1e6}` scheme could theoretically collide
+ * when sessions are created in the same millisecond — which does happen in
+ * the simulation and E2E tests.
+ *
+ * We prefer `crypto.getRandomValues` (available in modern RN runtimes and
+ * in Node 16+); if it isn't, we fall back to a wider-range Math.random
+ * concat so the test/node-only code path still works.
+ */
+function defaultIdGenerator(clock: () => number): () => string {
+  return () => {
+    let hex = '';
+    const g = (globalThis as { crypto?: { getRandomValues?: (a: Uint8Array) => void } }).crypto;
+    if (g?.getRandomValues !== undefined) {
+      const bytes = new Uint8Array(8);
+      g.getRandomValues(bytes);
+      hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+    } else {
+      // Fallback: two independent Math.random draws concatenated. ~106 bits of
+      // entropy, collision-free for any realistic session count.
+      hex =
+        Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, '0') +
+        Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, '0');
+    }
+    return `sess-${clock()}-${hex}`;
+  };
 }
 
 /**

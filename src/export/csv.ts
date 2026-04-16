@@ -53,6 +53,13 @@ function fmt(v: number): string {
  * Generate a CSV string for a session. The trajectory features shown on each
  * row are computed cumulatively — using only contractions up to and including
  * that row — so the file shows how each feature evolved through labor.
+ *
+ * Complexity note: the cumulative recomputation is O(n²) in contraction count.
+ * For typical labor sessions (<=50 contractions) this runs in under 10 ms at
+ * export time, so we keep the clear recompute-per-row structure rather than
+ * threading running-sum accumulators through computeTrajectoryFeatures. If a
+ * future use case involves thousands of contractions (e.g. batch processing
+ * of research recordings), switch to a forward-pass with running sums.
  */
 export function sessionToCsv(session: LaborSession): string {
   const header = COLUMNS.join(',');

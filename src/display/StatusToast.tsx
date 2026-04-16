@@ -12,15 +12,9 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { Animated, Easing, StyleSheet, Text } from 'react-native';
+import { STATUS_COLORS } from './colors';
 import { statusLabel } from '../alerts/uncertainty';
 import type { AlertStatus } from '../types';
-
-const COLORS: Record<AlertStatus, string> = {
-  green: '#3ecf75',
-  yellow: '#f2c94c',
-  red: '#eb5757',
-  grey: '#5a5a66',
-};
 
 /** Messages per target status, per SPEC.md §5.2 table. */
 const MESSAGES: Record<AlertStatus, string> = {
@@ -74,7 +68,7 @@ export function StatusToast({
 
   if (visibleStatus === null) return null;
 
-  const color = COLORS[visibleStatus];
+  const color = STATUS_COLORS[visibleStatus];
 
   return (
     <Animated.View
@@ -82,7 +76,7 @@ export function StatusToast({
       style={[styles.wrap, { borderColor: color, opacity }]}
     >
       <Text style={styles.title}>
-        <Text style={{ color: COLORS[prevStatus ?? 'grey'] }}>
+        <Text style={{ color: STATUS_COLORS[prevStatus ?? 'grey'] }}>
           {(prevStatus ?? 'grey').toUpperCase()}
         </Text>
         {' → '}

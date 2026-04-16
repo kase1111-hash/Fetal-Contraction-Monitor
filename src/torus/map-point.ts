@@ -123,19 +123,3 @@ export function computeTrajectory(
   return pts;
 }
 
-/**
- * Incremental update: given an existing trajectory and a newly appended
- * contraction, return the new trajectory with the previously-last point's
- * kappa back-filled (SPEC.md §4.2).
- */
-export function appendAndUpdateKappa(
-  existingPts: readonly TorusPoint[],
-  contractions: readonly ContractionResponse[],
-  mode: NormalizationMode = 'auto',
-): TorusPoint[] {
-  // For simplicity and correctness, recompute from the full list. In a production
-  // app with large session counts we'd cache bounds; for typical labor
-  // sessions (20–40 contractions) this is trivial cost.
-  void existingPts;
-  return computeTrajectory(contractions, mode);
-}

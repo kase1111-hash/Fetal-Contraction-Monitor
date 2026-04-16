@@ -74,21 +74,21 @@ export function fuse(set: DetectionSet): ContractionDetection[] {
   set.manual.forEach((m, mi) => {
     if (consumed.has(idx('m', mi))) return;
     // Find an accel detection within window.
-    let mergedConf = m.confidence;
     let prominence: number | undefined;
-    let fhrConfirmed = m.fhrConfirmed;
+    let fhrConfirmed = m.fhrConfirmed ?? false;
     set.accelerometer.forEach((a, ai) => {
       if (consumed.has(idx('a', ai))) return;
       if (withinWindow(a.peakTimestamp, m.peakTimestamp, MERGE_WINDOW_S)) {
         consumed.add(idx('a', ai));
-        mergedConf = Math.max(mergedConf, a.confidence);
         prominence = a.prominenceRaw;
-        fhrConfirmed = fhrConfirmed || a.fhrConfirmed;
+        fhrConfirmed = fhrConfirmed || (a.fhrConfirmed ?? false);
       }
     });
+    // SPEC §2.4: "Confidence = max(accel_conf, 1.0) = 1.0". Manual wins the
+    // timestamp and pins confidence at 1.0 because accel_conf ≤ 1.
     out.push({
       ...m,
-      confidence: Math.min(1, Math.max(1.0, mergedConf)), // manual pins floor at 1
+      confidence: 1,
       prominenceRaw: prominence,
       fhrConfirmed,
     });

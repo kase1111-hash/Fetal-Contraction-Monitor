@@ -87,6 +87,18 @@ export const LAST5_RED = 45;
 export const RED_PERSISTENCE = 2;
 
 // ---------------------------------------------------------------------------
+// UI thresholds (not research-validated; UI-only visual emphasis)
+// ---------------------------------------------------------------------------
+
+/**
+ * bpm — nadir depths deeper (more negative) than this are highlighted
+ * in the contraction log. UI-only emphasis threshold; not an alert
+ * trigger. Chosen as roughly the midpoint between a clinically normal
+ * ~10 bpm deceleration and the NADIR_MAP_MAX bound.
+ */
+export const NADIR_ALERT_DEPTH = -25;
+
+// ---------------------------------------------------------------------------
 // Buffering and timing
 // ---------------------------------------------------------------------------
 

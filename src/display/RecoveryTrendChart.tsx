@@ -10,6 +10,7 @@ import React from 'react';
 import { View } from 'react-native';
 import Svg, { Circle, Line, Polyline, Rect } from 'react-native-svg';
 import { LAST5_RED, LAST5_YELLOW } from '../constants';
+import { STATUS_COLORS, recoveryDotColor } from './colors';
 import { mean, olsSlope } from '../extraction/statistics';
 import type { AlertStatus, ContractionResponse } from '../types';
 
@@ -18,19 +19,6 @@ export interface RecoveryTrendChartProps {
   status: AlertStatus;
   width?: number;
   height?: number;
-}
-
-const STATUS_COLORS: Record<AlertStatus, string> = {
-  green: '#3ecf75',
-  yellow: '#f2c94c',
-  red: '#eb5757',
-  grey: '#5a5a66',
-};
-
-function recoveryColor(r: number): string {
-  if (r >= LAST5_RED) return '#eb5757';
-  if (r >= LAST5_YELLOW - 2) return '#f2c94c';
-  return '#3ecf75';
 }
 
 export function RecoveryTrendChart({
@@ -115,7 +103,7 @@ export function RecoveryTrendChart({
             cx={xAt(i)}
             cy={yScale(c.recoveryTime)}
             r={3}
-            fill={recoveryColor(c.recoveryTime)}
+            fill={recoveryDotColor(c.recoveryTime)}
           />
         ))}
       </Svg>
