@@ -75,10 +75,12 @@ export default function SettingsScreen(): React.ReactElement {
   return (
     <ScrollView style={styles.root} contentContainerStyle={styles.content}>
       <Section title="Doppler">
-        <Text style={styles.body}>
-          Connect a Bluetooth fetal Doppler from the Monitor screen. BLE pairing
-          requires on-device permission; scan support appears there when ready.
-        </Text>
+        <Link href="/pair" asChild>
+          <Pressable style={styles.row}>
+            <Text style={styles.rowLabel}>Connect Doppler & sensors</Text>
+            <Text style={styles.chevron}>›</Text>
+          </Pressable>
+        </Link>
       </Section>
 
       <Section title="Past sessions">
