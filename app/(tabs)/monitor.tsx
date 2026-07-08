@@ -13,7 +13,8 @@
  */
 
 import React, { useEffect, useMemo, useRef } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Link } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 
 import { StatusLight } from '../../src/display/StatusLight';
@@ -31,6 +32,7 @@ import {
   statusLabel,
 } from '../../src/alerts/uncertainty';
 import { useSession } from '../../src/state/session-context';
+import { useLiveSensors } from '../../src/state/live-sensors';
 import { computeTrajectory } from '../../src/torus/map-point';
 import type { AlertStatus, ContractionResponse } from '../../src/types';
 
@@ -38,6 +40,19 @@ function formatTimeElapsed(startMs: number, nowMs: number): string {
   const mins = Math.floor((nowMs - startMs) / 60_000);
   if (mins < 60) return `${mins}m`;
   return `${Math.floor(mins / 60)}h ${mins % 60}m`;
+}
+
+function connectionLabel(state: string): string {
+  switch (state) {
+    case 'connected':
+      return 'connected';
+    case 'connecting':
+      return 'connecting…';
+    case 'scanning':
+      return 'scanning…';
+    default:
+      return 'not connected';
+  }
 }
 
 function useStatusHaptics(status: AlertStatus): void {
@@ -64,6 +79,7 @@ export default function MonitorScreen(): React.ReactElement {
     endSession,
     recordDetection,
   } = useSession();
+  const { connectionState, accelEnabled } = useLiveSensors();
 
   const contractions = session?.contractions ?? [];
   const last: ContractionResponse | undefined = contractions[contractions.length - 1];
@@ -110,6 +126,18 @@ export default function MonitorScreen(): React.ReactElement {
           </View>
           <SignalQualityBadge quality={signalQuality} />
         </View>
+
+        <Link href="/pair" asChild>
+          <Pressable style={styles.connRow}>
+            <Text style={styles.connText}>
+              Doppler: {connectionLabel(connectionState)}
+              {accelEnabled ? ' · accel on' : ''}
+            </Text>
+            <Text style={styles.connLink}>
+              {connectionState === 'connected' ? 'Manage ›' : 'Connect ›'}
+            </Text>
+          </Pressable>
+        </Link>
 
         <View style={styles.stats}>
           <Stat
@@ -230,6 +258,19 @@ const styles = StyleSheet.create({
   content: { padding: 16, alignItems: 'center' },
   topRow: { flexDirection: 'row', alignItems: 'center', width: '100%', gap: 12 },
   topInfo: { flex: 1 },
+  connRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    width: '100%',
+    marginTop: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    backgroundColor: '#12121c',
+  },
+  connText: { color: '#9a9aa6', fontSize: 12 },
+  connLink: { color: '#6b8cff', fontSize: 12, fontWeight: '600' },
   statusLabel: { color: '#cfcfd4', fontSize: 14, fontWeight: '600' },
   uncertain: { color: '#f2c94c', fontSize: 11, marginTop: 2, lineHeight: 15 },
   baselineInfo: { color: '#9a9aa6', fontSize: 11, marginTop: 2 },
