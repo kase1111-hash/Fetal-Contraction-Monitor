@@ -19,6 +19,9 @@
  *   "rr_ms = rr_raw / 1.024"
  */
 
+import { makeSample } from './quality-gate';
+import type { FHRSample } from '../types';
+
 export interface ParsedHrm {
   /** Beats per minute. */
   hr: number;
@@ -93,4 +96,35 @@ export function parseHrm(bytes: Uint8Array): ParsedHrm {
 export function deriveIntervalFromHr(hrBpm: number): number {
   if (hrBpm <= 0) return 0;
   return 60_000 / hrBpm;
+}
+
+/**
+ * Expand one parsed HRM notification into FHR samples, **oldest first**.
+ *
+ * RR intervals are preferred (SPEC.md §1.1). A notification carries the RR
+ * intervals that completed since the previous notification, in transmission
+ * order (oldest → newest), and the last one ends at the moment the packet was
+ * received. So the k-th beat's timestamp is `now − (sum of all RR after k)`.
+ *
+ * Emission order matters: `FhrBuffer` documents its contents as oldest-first,
+ * `FhrBuffer.slice` early-exits on the first sample past its upper bound, and
+ * `extractResponse` integrates response area trapezoidally over the samples in
+ * array order. Feeding it a descending run silently corrupts all three.
+ *
+ * When no RR intervals are present, a single HR-derived sample is stamped at
+ * `nowMs`.
+ */
+export function hrmToSamples(parsed: ParsedHrm, nowMs: number): FHRSample[] {
+  if (parsed.rrMs.length === 0) {
+    return [makeSample(parsed.hr, nowMs, 'hr')];
+  }
+  const total = parsed.rrMs.reduce((a, b) => a + b, 0);
+  let cursor = nowMs - total;
+  const out: FHRSample[] = [];
+  for (const rr of parsed.rrMs) {
+    cursor += rr; // this beat ends at the close of its interval
+    const bpm = rr > 0 ? 60_000 / rr : parsed.hr;
+    out.push(makeSample(bpm, cursor, 'rr'));
+  }
+  return out;
 }

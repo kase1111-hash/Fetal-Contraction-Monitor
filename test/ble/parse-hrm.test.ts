@@ -1,4 +1,5 @@
-import { parseHrm, deriveIntervalFromHr } from '../../src/ble/parse-hrm';
+import { parseHrm, deriveIntervalFromHr, hrmToSamples } from '../../src/ble/parse-hrm';
+import { FhrBuffer } from '../../src/ble/fhr-buffer';
 
 describe('parseHrm', () => {
   test('uint8 HR, no RR', () => {
@@ -75,5 +76,55 @@ describe('deriveIntervalFromHr', () => {
   });
   test('0 → 0 (guard)', () => {
     expect(deriveIntervalFromHr(0)).toBe(0);
+  });
+});
+
+describe('hrmToSamples', () => {
+  const NOW = 1_700_000_000_000;
+
+  test('no RR intervals → one HR-derived sample stamped at now', () => {
+    const p = parseHrm(new Uint8Array([0x00, 140]));
+    const samples = hrmToSamples(p, NOW);
+    expect(samples).toHaveLength(1);
+    expect(samples[0]!.fhr).toBe(140);
+    expect(samples[0]!.timestamp).toBe(NOW);
+    expect(samples[0]!.source).toBe('hr');
+  });
+
+  test('emits RR-derived samples oldest first', () => {
+    // flags=0x10 (RR present), hr=140, three RR intervals of 400/430/410 raw.
+    const bytes = new Uint8Array([0x10, 140, 0x90, 0x01, 0xae, 0x01, 0x9a, 0x01]);
+    const p = parseHrm(bytes);
+    expect(p.rrMs).toHaveLength(3);
+
+    const samples = hrmToSamples(p, NOW);
+    expect(samples).toHaveLength(3);
+
+    const ts = samples.map((s) => s.timestamp);
+    expect(ts).toEqual([...ts].sort((a, b) => a - b));
+    // The newest beat closes exactly at the notification time.
+    expect(ts[ts.length - 1]).toBeCloseTo(NOW, 6);
+    // Each beat is spaced by its own RR interval.
+    expect(ts[1]! - ts[0]!).toBeCloseTo(p.rrMs[1]!, 6);
+    expect(ts[2]! - ts[1]!).toBeCloseTo(p.rrMs[2]!, 6);
+  });
+
+  test('RR values convert to bpm', () => {
+    // Single RR of 512 raw = 500 ms → 120 bpm.
+    const bytes = new Uint8Array([0x10, 140, 0x00, 0x02]);
+    const samples = hrmToSamples(parseHrm(bytes), NOW);
+    expect(samples).toHaveLength(1);
+    expect(samples[0]!.fhr).toBeCloseTo(120, 6);
+    expect(samples[0]!.source).toBe('rr');
+    expect(samples[0]!.timestamp).toBeCloseTo(NOW, 6);
+  });
+
+  test('feeding a whole notification into FhrBuffer keeps it ordered', () => {
+    const bytes = new Uint8Array([0x10, 140, 0x90, 0x01, 0xae, 0x01, 0x9a, 0x01]);
+    const buf = new FhrBuffer();
+    for (const s of hrmToSamples(parseHrm(bytes), NOW)) buf.push(s);
+    const ts = buf.all().map((s) => s.timestamp);
+    expect(ts).toEqual([...ts].sort((a, b) => a - b));
+    expect(buf.latestValid()!.timestamp).toBeCloseTo(NOW, 6);
   });
 });

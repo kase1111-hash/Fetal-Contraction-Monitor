@@ -12,7 +12,7 @@
  */
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { ScrollView, Share, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
 import { Stack, useLocalSearchParams } from 'expo-router';
 
 import { useSession } from '../../src/state/session-context';
@@ -161,11 +161,17 @@ function Summary({ label, value }: { label: string; value: string }): React.Reac
   );
 }
 
+// Pressable, not View+onTouchEnd — a raw touch handler inside a ScrollView also
+// fires when the user was merely scrolling past the button.
 function ActionButton({ label, onPress }: { label: string; onPress(): void }): React.ReactElement {
   return (
-    <View style={styles.actionBtn} onTouchEnd={onPress}>
+    <Pressable
+      accessibilityRole="button"
+      onPress={onPress}
+      style={({ pressed }) => [styles.actionBtn, { opacity: pressed ? 0.7 : 1 }]}
+    >
       <Text style={styles.actionText}>{label}</Text>
-    </View>
+    </Pressable>
   );
 }
 

@@ -16,8 +16,7 @@
 import { BleManager, Device, Subscription } from 'react-native-ble-plx';
 import { Buffer } from 'buffer';
 
-import { makeSample } from './quality-gate';
-import { parseHrm, deriveIntervalFromHr } from './parse-hrm';
+import { hrmToSamples, parseHrm, type ParsedHrm } from './parse-hrm';
 import type {
   ConnectionState,
   DiscoveredDevice,
@@ -36,8 +35,18 @@ export class BleDoppler implements DopplerClient {
   private readonly manager: BleManager;
   private device: Device | null = null;
   private notifSub: Subscription | null = null;
+  private disconnectSub: Subscription | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectStartedAt: number | null = null;
+  /** Device we should reconnect to; survives `device` being cleared. */
+  private lastDeviceId: string | null = null;
+  /**
+   * Set while a user-initiated disconnect is in flight. `cancelConnection()`
+   * fires the same `onDisconnected` callback as a dropped link, and without
+   * this flag the app would silently reconnect 5 s after the user asked it
+   * not to.
+   */
+  private disconnecting = false;
 
   private _state: ConnectionState = 'idle';
   private sampleHandlers: Array<(s: FHRSample) => void> = [];
@@ -67,25 +76,43 @@ export class BleDoppler implements DopplerClient {
     this.setState('connecting');
     const device = await this.manager.connectToDevice(deviceId);
     await device.discoverAllServicesAndCharacteristics();
+    // Drop any subscriptions left over from a previous link before adding new
+    // ones — otherwise every reconnect stacks another notification listener
+    // and the same beat gets fanned out once per past connection.
+    this.clearSubscriptions();
     this.device = device;
+    this.lastDeviceId = deviceId;
     this.subscribeToNotifications();
     this.watchForDisconnect();
     this.setState('connected');
   }
 
   async disconnect(): Promise<void> {
-    this.clearReconnectTimer();
+    this.disconnecting = true;
+    try {
+      this.clearReconnectTimer();
+      this.reconnectStartedAt = null;
+      this.clearSubscriptions();
+      if (this.device) {
+        try {
+          await this.device.cancelConnection();
+        } catch {
+          /* ignore — already disconnected */
+        }
+      }
+      this.device = null;
+      this.lastDeviceId = null;
+      this.setState('disconnected');
+    } finally {
+      this.disconnecting = false;
+    }
+  }
+
+  private clearSubscriptions(): void {
     this.notifSub?.remove();
     this.notifSub = null;
-    if (this.device) {
-      try {
-        await this.device.cancelConnection();
-      } catch {
-        /* ignore — already disconnected */
-      }
-    }
-    this.device = null;
-    this.setState('disconnected');
+    this.disconnectSub?.remove();
+    this.disconnectSub = null;
   }
 
   state(): ConnectionState {
@@ -126,31 +153,12 @@ export class BleDoppler implements DopplerClient {
   }
 
   /**
-   * RR intervals are preferred (SPEC.md §1.1). When RR is present, we reconstruct
-   * per-beat FHR values sequentially from the notification timestamp backwards.
-   * When RR is absent, fall back to the HR field directly.
+   * Expand a notification into samples and fan them out. The oldest-first
+   * ordering guaranteed by `hrmToSamples` is what the downstream buffer and
+   * extractor rely on — see the note on that function.
    */
-  private emitSamplesFromParsed(parsed: {
-    hr: number;
-    rrMs: number[];
-  }): void {
-    const now = Date.now();
-    if (parsed.rrMs.length > 0) {
-      // Reconstruct beat-by-beat timestamps: the most recent RR ends at `now`,
-      // the preceding one ends `rr_{k}` ms earlier, etc.
-      let cursor = now;
-      // Iterate newest-first so each sample timestamps at its own beat end.
-      for (let i = parsed.rrMs.length - 1; i >= 0; i--) {
-        const rr = parsed.rrMs[i]!;
-        const bpm = rr > 0 ? 60_000 / rr : parsed.hr;
-        const sample = makeSample(bpm, cursor, 'rr');
-        this.fanOutSample(sample);
-        cursor -= rr;
-      }
-    } else {
-      const interval = deriveIntervalFromHr(parsed.hr);
-      void interval; // informational; we stamp at `now`.
-      const sample = makeSample(parsed.hr, now, 'hr');
+  private emitSamplesFromParsed(parsed: ParsedHrm): void {
+    for (const sample of hrmToSamples(parsed, Date.now())) {
       this.fanOutSample(sample);
     }
   }
@@ -161,15 +169,18 @@ export class BleDoppler implements DopplerClient {
 
   private watchForDisconnect(): void {
     if (!this.device) return;
-    this.device.onDisconnected(() => {
+    this.disconnectSub = this.device.onDisconnected(() => {
+      // A user-initiated `disconnect()` also lands here via cancelConnection.
+      // Don't fight the user by reconnecting.
+      if (this.disconnecting) return;
       this.setState('disconnected');
       this.scheduleReconnect();
     });
   }
 
   private scheduleReconnect(): void {
-    const deviceId = this.device?.id;
-    if (!deviceId) return;
+    const deviceId = this.lastDeviceId;
+    if (deviceId === null) return;
     if (this.reconnectStartedAt === null) this.reconnectStartedAt = Date.now();
     const elapsed = Date.now() - this.reconnectStartedAt;
     if (elapsed > RECONNECT_CEILING_MS) {
@@ -177,7 +188,10 @@ export class BleDoppler implements DopplerClient {
       this.reconnectStartedAt = null;
       return;
     }
+    this.clearReconnectTimer();
     this.reconnectTimer = setTimeout(async () => {
+      this.reconnectTimer = null;
+      if (this.disconnecting) return;
       try {
         await this.connect(deviceId);
         this.reconnectStartedAt = null;
