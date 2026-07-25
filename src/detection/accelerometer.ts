@@ -153,6 +153,46 @@ export class AccelDetector {
     // Extend low-pass + rolling-std on the fly.
     this.extendLowPass();
     this.extendRollingStd();
+    this.trimHistory();
+  }
+
+  /**
+   * Drop history that no later computation can reach.
+   *
+   * Labor runs for hours and this detector is fed continuously, so without
+   * this the three series grow without bound — about 14 k entries each per
+   * hour at the 4 Hz downsample rate, on a device that is simultaneously
+   * buffering FHR and driving the UI. Every read the detector performs is
+   * windowed (low-pass 10 s, rolling std 30 s, adaptive threshold 600 s), so
+   * anything older than the longest of those windows is unreachable.
+   *
+   * Retention is deliberately the window length plus a margin, never less:
+   * trimming into a live window would silently change detector output.
+   */
+  private trimHistory(): void {
+    const newest = this.downs[this.downs.length - 1]?.t;
+    if (newest === undefined) return;
+    const marginMs = 5_000;
+
+    this.downs = dropBefore(
+      this.downs,
+      newest - (this.opts.lowpassSeconds * 1000 + marginMs),
+    );
+    this.lp = dropBefore(
+      this.lp,
+      newest - (this.opts.stdWindowSeconds * 1000 + marginMs),
+    );
+
+    // `scanCursor` indexes into `rstd`, so shift it by however much we drop.
+    const beforeLen = this.rstd.length;
+    this.rstd = dropBefore(
+      this.rstd,
+      newest - (this.opts.adaptiveLookbackSeconds * 1000 + marginMs),
+    );
+    const removed = beforeLen - this.rstd.length;
+    if (removed > 0) {
+      this.scanCursor = Math.max(1, this.scanCursor - removed);
+    }
   }
 
   // ----- Low-pass (causal moving average over `lowpassSeconds`) ------------
@@ -273,4 +313,17 @@ export class AccelDetector {
     this.scanCursor = Math.max(1, this.rstd.length - 1);
     return emitted;
   }
+}
+
+/**
+ * Drop leading entries older than `cutoffMs`. Series are time-ordered, so a
+ * scan from the front stops at the first survivor. Returns the original array
+ * when nothing is dropped, to avoid a copy on the common path.
+ */
+function dropBefore<T extends { t: number }>(series: T[], cutoffMs: number): T[] {
+  let firstKeep = 0;
+  while (firstKeep < series.length && series[firstKeep]!.t < cutoffMs) {
+    firstKeep++;
+  }
+  return firstKeep === 0 ? series : series.slice(firstKeep);
 }

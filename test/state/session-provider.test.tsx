@@ -15,6 +15,7 @@ import {
   type SessionContextValue,
 } from '../../src/state/session-context';
 import { makeSample } from '../../src/ble/quality-gate';
+import { simulateResponses } from '../../src/simulation/scenarios';
 import { MemoryKvStore } from '../../src/storage/kv';
 import {
   SessionStore,
@@ -139,6 +140,75 @@ describe('SessionProvider — inserting a missed contraction', () => {
 
     expect(api.session?.contractions ?? []).toHaveLength(0);
     expect(api.pendingCount).toBe(0); // dropped, not stuck pending
+
+    act(() => renderer.unmount());
+  });
+});
+
+describe('SessionProvider — loading a simulated session', () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  test('replays the scenario through the reducer so status and baseline settle', () => {
+    const renderer = mount(new MemoryKvStore());
+
+    const responses = simulateResponses('normal', { count: 15 });
+    act(() => api.loadSimulatedSession(responses));
+
+    const s = api.session!;
+    expect(s.contractions).toHaveLength(15);
+    // Went through add-contraction, so the derived state is populated.
+    expect(s.personalBaseline).not.toBeNull();
+    expect(s.recoveryTrendSlope).not.toBeNull();
+    expect(s.status).not.toBe('grey');
+    expect(s.startTime).toBeLessThan(s.contractions[0]!.contractionPeakTime);
+    expect(s.endTime).toBeNull();
+
+    act(() => renderer.unmount());
+  });
+
+  test('a distress scenario reaches a non-green status', () => {
+    const renderer = mount(new MemoryKvStore());
+    act(() => api.loadSimulatedSession(simulateResponses('distress', { count: 15 })));
+    expect(['yellow', 'red']).toContain(api.session!.status);
+    act(() => renderer.unmount());
+  });
+
+  test('replaces any previous session rather than appending to it', () => {
+    const renderer = mount(new MemoryKvStore());
+
+    act(() => api.loadSimulatedSession(simulateResponses('normal', { count: 15 })));
+    const firstId = api.session!.id;
+
+    act(() => api.loadSimulatedSession(simulateResponses('concerning', { count: 12 })));
+    expect(api.session!.contractions).toHaveLength(12);
+    expect(api.session!.id).not.toBe(firstId);
+
+    act(() => renderer.unmount());
+  });
+
+  test('clears pending detections left over from a live session', () => {
+    const renderer = mount(new MemoryKvStore());
+    act(() => api.startSession());
+    act(() => {
+      api.recordDetection({
+        peakTimestamp: Date.now(),
+        method: 'manual',
+        confidence: 1,
+      });
+    });
+    expect(api.pendingCount).toBe(1);
+
+    act(() => api.loadSimulatedSession(simulateResponses('normal', { count: 15 })));
+    expect(api.pendingCount).toBe(0);
+
+    // The stale detection must not surface later on top of the simulation.
+    act(() => jest.advanceTimersByTime(120_000));
+    expect(api.session!.contractions).toHaveLength(15);
 
     act(() => renderer.unmount());
   });

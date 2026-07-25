@@ -23,7 +23,7 @@ import React, {
 import { FhrBuffer } from '../ble/fhr-buffer';
 import { AccelDetector, type RawAccelSample } from '../detection/accelerometer';
 import { MERGE_WINDOW_S, applyFhrConfirmation } from '../detection/fusion';
-import { AUTO_SAVE_INTERVAL_MS } from '../constants';
+import { AUTO_SAVE_INTERVAL_MS, BASELINE_WINDOW } from '../constants';
 import { ContractionQueue } from './contraction-queue';
 import { sessionReducer, type ContractionEdit } from './session-reducer';
 import { SessionStore } from '../storage/session-store';
@@ -69,6 +69,13 @@ export interface SessionContextValue {
 
   /** Load completed sessions from storage. Returns newest-first. */
   loadHistory(): Promise<LaborSession[]>;
+
+  /**
+   * Replace the current session with a set of pre-extracted responses
+   * (simulation mode). Starts a fresh session and adds each response in order,
+   * so status, baseline and trend all recompute exactly as they would live.
+   */
+  loadSimulatedSession(responses: readonly ContractionResponse[]): void;
 
   // --- Phase 4: study mode ------------------------------------------------
 
@@ -250,6 +257,31 @@ export function SessionProvider({
     return store.loadHistory();
   }, [store]);
 
+  const loadSimulatedSession = useCallback(
+    (responses: readonly ContractionResponse[]) => {
+      // Date the session from the first contraction's baseline window so the
+      // elapsed-time readout matches the simulated trajectory.
+      const startAt =
+        responses.length > 0
+          ? responses[0]!.contractionPeakTime - BASELINE_WINDOW * 1000
+          : clock();
+      dispatch({ type: 'start', id: idGen(), at: startAt });
+      buffer.current.clear();
+      queue.current.clear();
+      accelDetector.current = new AccelDetector();
+      manualPeaks.current = [];
+      setPendingCount(0);
+      for (const response of responses) {
+        dispatch({
+          type: 'add-contraction',
+          response,
+          at: response.contractionPeakTime,
+        });
+      }
+    },
+    [clock, idGen],
+  );
+
   const insertContractionAt = useCallback(
     (peakMs: number) => {
       // Manual insert: enqueue as a manual detection at the chosen time.
@@ -286,6 +318,7 @@ export function SessionProvider({
     updateContraction,
     insertContractionAt,
     loadHistory,
+    loadSimulatedSession,
     studyMode,
     setStudyMode,
     studyRecorder: studyRecorder.current,

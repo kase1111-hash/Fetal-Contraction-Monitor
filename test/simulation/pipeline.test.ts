@@ -10,8 +10,14 @@
 import {
   scenarioParams,
   generateFhrStream,
+  simulateResponses,
   type ScenarioKind,
 } from '../../src/simulation/scenarios';
+import {
+  BASELINE_WINDOW,
+  LAST5_YELLOW,
+  RESPONSE_WINDOW,
+} from '../../src/constants';
 import { extractResponse } from '../../src/extraction/extract-response';
 import { computeTrajectoryFeatures } from '../../src/trajectory/features';
 import type { ContractionResponse } from '../../src/types';
@@ -83,5 +89,74 @@ describe('Simulation pipeline — Distress scenario', () => {
   test('nadirs deepen (trend slope negative)', () => {
     const f = computeTrajectoryFeatures(responses);
     expect(f.nadirTrendSlope).toBeLessThan(0);
+  });
+});
+
+/**
+ * These exercise the whole-session helper the Settings screen calls, rather
+ * than extracting each stream in isolation the way the tests above do.
+ *
+ * That distinction is the bug this guards. The screen used to feed every
+ * scenario stream into the live FhrBuffer at 2 s spacing while each stream
+ * spans BASELINE_WINDOW + RESPONSE_WINDOW = 90 s, so the streams overlapped
+ * and every extraction read a blend of its neighbours. "Normal labor" came
+ * back as -30 bpm nadirs and 60 s recoveries (the "never recovered" fallback)
+ * on every contraction, for all three scenarios.
+ */
+describe('simulateResponses — whole-session scenarios', () => {
+  test('produces the requested number of extracted contractions', () => {
+    for (const kind of ['normal', 'concerning', 'distress'] as const) {
+      expect(simulateResponses(kind, { count: 15 })).toHaveLength(15);
+    }
+  });
+
+  test('normal labor stays inside reassuring bounds', () => {
+    const responses = simulateResponses('normal', { count: 15 });
+    const f = computeTrajectoryFeatures(responses);
+
+    expect(f.recoveryLast5Mean).toBeLessThan(LAST5_YELLOW);
+    expect(Math.abs(f.recoveryTrendSlope)).toBeLessThanOrEqual(1);
+    // No contraction may sit at the "never recovered" ceiling.
+    for (const c of responses) {
+      expect(c.recoveryTime).toBeLessThan(RESPONSE_WINDOW);
+      expect(c.recoveryTime).toBeGreaterThan(0);
+    }
+  });
+
+  test('nadirs deepen gradually rather than pinning at the deepest value', () => {
+    const responses = simulateResponses('normal', { count: 15 });
+    const depths = responses.map((c) => c.nadirDepth);
+    // The scenario ramps -10 -> -30 bpm; a flat series means the streams
+    // bled into each other.
+    expect(new Set(depths.map((d) => d.toFixed(1))).size).toBeGreaterThan(5);
+    expect(depths[0]!).toBeGreaterThan(depths[depths.length - 1]!);
+    expect(depths[0]!).toBeGreaterThan(-15);
+  });
+
+  test('the three scenarios are actually distinguishable', () => {
+    const normal = computeTrajectoryFeatures(simulateResponses('normal'));
+    const concerning = computeTrajectoryFeatures(simulateResponses('concerning'));
+    const distress = computeTrajectoryFeatures(simulateResponses('distress'));
+
+    expect(concerning.recoveryTrendSlope).toBeGreaterThan(normal.recoveryTrendSlope);
+    expect(distress.recoveryTrendSlope).toBeGreaterThan(concerning.recoveryTrendSlope);
+    expect(distress.recoveryLast5Mean).toBeGreaterThan(normal.recoveryLast5Mean);
+  });
+
+  test('contractions are spaced far enough apart not to overlap', () => {
+    const responses = simulateResponses('normal', { count: 5 });
+    const minGap = (BASELINE_WINDOW + RESPONSE_WINDOW) * 1000;
+    for (let i = 1; i < responses.length; i++) {
+      const gap =
+        responses[i]!.contractionPeakTime - responses[i - 1]!.contractionPeakTime;
+      expect(gap).toBeGreaterThanOrEqual(minGap);
+    }
+  });
+
+  test('rejects a spacing that would let windows overlap', () => {
+    // The old screen used 2 s. That must now be impossible to ask for.
+    expect(() => simulateResponses('normal', { spacingMs: 2_000 })).toThrow(
+      /spacingMs/,
+    );
   });
 });
