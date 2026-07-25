@@ -7,9 +7,17 @@
  *   - Long-press a row to delete it (with confirmation).
  *
  * Deferred (see GitHub issues, not inline TODOs):
- *   - Drag to adjust timing on the timeline view.
  *   - Long-press on the timeline to insert a missed contraction.
- *     (insertContractionAt is already wired on the context.)
+ *     `insertContractionAt` on the session context already does this
+ *     correctly — it extracts from the live FHR buffer — so the UI is all
+ *     that's missing. Note the peak time must still be inside the 120 s
+ *     buffer for the extraction to succeed.
+ *   - Drag to adjust timing on the timeline view. This one is NOT just UI:
+ *     `updateContraction` deliberately cannot move `contractionPeakTime`,
+ *     because the extracted features were measured against the old peak and
+ *     can only be recomputed while the samples are still buffered. Implement
+ *     it as a re-extraction in SessionProvider that refuses when the window
+ *     has aged out — see `ContractionEdit` in state/session-reducer.ts.
  */
 
 import React, { useState } from 'react';

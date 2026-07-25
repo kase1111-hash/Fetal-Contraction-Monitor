@@ -68,8 +68,9 @@ export function FHRResponseCurve({
   const baseline = contraction.baselineFHR;
   const nadir = baseline + contraction.nadirDepth;
 
-  // FHR axis: baseline ± 40 bpm, but always include the nadir with margin.
-  const yMax = Math.max(baseline + 10, baseline + 20);
+  // FHR axis: 20 bpm of headroom above baseline, and at least 40 bpm below it —
+  // extended further when the nadir is deeper than that, so it always fits.
+  const yMax = baseline + 20;
   const yMin = Math.min(nadir - 10, baseline - 40);
 
   const xScale = (t: number) => pad + ((t - tMin) / (tMax - tMin)) * w;

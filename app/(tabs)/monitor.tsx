@@ -12,7 +12,7 @@
  *   7. Control bar: Start/Stop + Contraction button
  */
 
-import React, { useEffect, useMemo, useRef } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Link } from 'expo-router';
 import * as Haptics from 'expo-haptics';
@@ -53,6 +53,20 @@ function connectionLabel(state: string): string {
     default:
       return 'not connected';
   }
+}
+
+/**
+ * Wall-clock that ticks once a second, so "Elapsed" keeps counting even when
+ * nothing else re-renders the screen (no Doppler connected, no contractions).
+ */
+function useNowTicker(active: boolean): number {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    const h = setInterval(() => setNowMs(Date.now()), 1_000);
+    return () => clearInterval(h);
+  }, [active]);
+  return nowMs;
 }
 
 function useStatusHaptics(status: AlertStatus): void {
@@ -100,6 +114,9 @@ export default function MonitorScreen(): React.ReactElement {
   const status: AlertStatus = session?.status ?? 'grey';
   useStatusHaptics(status);
 
+  const sessionRunning = session !== null && session.endTime === null;
+  const nowMs = useNowTicker(sessionRunning);
+
   // Phase 3: uncertainty detail
   const grey = greyReason(session);
   const qualityTrend = recentQualityTrend(contractions);
@@ -142,7 +159,11 @@ export default function MonitorScreen(): React.ReactElement {
         <View style={styles.stats}>
           <Stat
             label="Elapsed"
-            value={session ? formatTimeElapsed(session.startTime, Date.now()) : '—'}
+            value={
+              session
+                ? formatTimeElapsed(session.startTime, session.endTime ?? nowMs)
+                : '—'
+            }
           />
           <Stat label="CTX" value={String(contractions.length)} />
           <Stat
@@ -237,19 +258,37 @@ function Stat({ label, value, unit }: { label: string; value: string; unit?: str
   );
 }
 
+// Pressable, not View+onTouchEnd: these buttons sit inside a ScrollView, and a
+// raw touch handler fires at the end of *any* touch that lands on the view —
+// including one that was a scroll gesture. Ending a session by accident while
+// scrolling the monitor is not acceptable.
 function PrimaryButton({ label, onPress }: { label: string; onPress(): void }): React.ReactElement {
   return (
-    <View style={[styles.actionBtn, { backgroundColor: '#3a5bff' }]} onTouchEnd={onPress}>
+    <Pressable
+      accessibilityRole="button"
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.actionBtn,
+        { backgroundColor: '#3a5bff', opacity: pressed ? 0.7 : 1 },
+      ]}
+    >
       <Text style={styles.actionLabel}>{label}</Text>
-    </View>
+    </Pressable>
   );
 }
 
 function SecondaryButton({ label, onPress }: { label: string; onPress(): void }): React.ReactElement {
   return (
-    <View style={[styles.actionBtn, { backgroundColor: '#2a2a3b' }]} onTouchEnd={onPress}>
+    <Pressable
+      accessibilityRole="button"
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.actionBtn,
+        { backgroundColor: '#2a2a3b', opacity: pressed ? 0.7 : 1 },
+      ]}
+    >
       <Text style={styles.actionLabel}>{label}</Text>
-    </View>
+    </Pressable>
   );
 }
 

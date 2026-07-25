@@ -8,16 +8,16 @@
  * The wrapper implements DopplerClient so the rest of the app is agnostic to
  * whether it's running against a real device or FakeDoppler.
  *
- * This module only compiles when react-native-ble-plx is installed and the
- * app is running inside the Expo / React Native runtime — it is not imported
- * by unit tests.
+ * react-native-ble-plx is required lazily, and the transport is described here
+ * by the narrow structural interfaces below rather than by that package's
+ * types. That keeps this module importable under plain Node, so the connect /
+ * disconnect / reconnect state machine — which is safety-relevant and cannot
+ * be exercised on a simulator — is unit-testable against a fake transport.
  */
 
-import { BleManager, Device, Subscription } from 'react-native-ble-plx';
 import { Buffer } from 'buffer';
 
-import { makeSample } from './quality-gate';
-import { parseHrm, deriveIntervalFromHr } from './parse-hrm';
+import { hrmToSamples, parseHrm, type ParsedHrm } from './parse-hrm';
 import type {
   ConnectionState,
   DiscoveredDevice,
@@ -32,19 +32,83 @@ const HEART_RATE_MEASUREMENT_UUID = '00002a37-0000-1000-8000-00805f9b34fb';
 const RECONNECT_INTERVAL_MS = 5_000;
 const RECONNECT_CEILING_MS = 2 * 60 * 1000;
 
+// --- Structural view of the transport ---------------------------------------
+// Only the members this client actually touches. `react-native-ble-plx`'s real
+// BleManager/Device satisfy these; so does a test fake.
+
+export interface BleSubscriptionLike {
+  remove(): void;
+}
+
+export interface BleCharacteristicLike {
+  /** Base64-encoded characteristic value. */
+  value: string | null;
+}
+
+export interface BleAdvertisedDeviceLike {
+  id: string;
+  name: string | null;
+  rssi: number | null;
+}
+
+export interface BleDeviceLike extends BleAdvertisedDeviceLike {
+  discoverAllServicesAndCharacteristics(): Promise<unknown>;
+  monitorCharacteristicForService(
+    serviceUUID: string,
+    characteristicUUID: string,
+    listener: (
+      error: unknown,
+      characteristic: BleCharacteristicLike | null,
+    ) => void,
+  ): BleSubscriptionLike;
+  cancelConnection(): Promise<unknown>;
+  onDisconnected(listener: (error: unknown) => void): BleSubscriptionLike;
+}
+
+export interface BleManagerLike {
+  startDeviceScan(
+    serviceUUIDs: string[] | null,
+    options: unknown,
+    listener: (error: unknown, device: BleAdvertisedDeviceLike | null) => void,
+  ): void;
+  stopDeviceScan(): void;
+  connectToDevice(deviceId: string): Promise<BleDeviceLike>;
+}
+
+/**
+ * Construct the real native manager. Throws when the native module is absent
+ * (Expo Go, web, node) — `make-doppler.ts` catches that and falls back to
+ * FakeDoppler.
+ */
+function defaultManager(): BleManagerLike {
+  const { BleManager } =
+    require('react-native-ble-plx') as typeof import('react-native-ble-plx');
+  return new BleManager() as unknown as BleManagerLike;
+}
+
 export class BleDoppler implements DopplerClient {
-  private readonly manager: BleManager;
-  private device: Device | null = null;
-  private notifSub: Subscription | null = null;
+  private readonly manager: BleManagerLike;
+  private device: BleDeviceLike | null = null;
+  private notifSub: BleSubscriptionLike | null = null;
+  private disconnectSub: BleSubscriptionLike | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectStartedAt: number | null = null;
+  /** Device we should reconnect to; survives `device` being cleared. */
+  private lastDeviceId: string | null = null;
+  /**
+   * Set while a user-initiated disconnect is in flight. `cancelConnection()`
+   * fires the same `onDisconnected` callback as a dropped link, and without
+   * this flag the app would silently reconnect 5 s after the user asked it
+   * not to.
+   */
+  private disconnecting = false;
 
   private _state: ConnectionState = 'idle';
   private sampleHandlers: Array<(s: FHRSample) => void> = [];
   private stateHandlers: Array<(s: ConnectionState) => void> = [];
 
-  constructor(manager?: BleManager) {
-    this.manager = manager ?? new BleManager();
+  constructor(manager?: BleManagerLike) {
+    this.manager = manager ?? defaultManager();
   }
 
   async scan(timeoutMs = 8000): Promise<DiscoveredDevice[]> {
@@ -65,27 +129,53 @@ export class BleDoppler implements DopplerClient {
 
   async connect(deviceId: string): Promise<void> {
     this.setState('connecting');
-    const device = await this.manager.connectToDevice(deviceId);
-    await device.discoverAllServicesAndCharacteristics();
+    let device: BleDeviceLike;
+    try {
+      device = await this.manager.connectToDevice(deviceId);
+      await device.discoverAllServicesAndCharacteristics();
+    } catch (e) {
+      // Leaving the state at 'connecting' would strand every screen showing
+      // "Connecting…" forever for a link that is not coming back.
+      this.setState('disconnected');
+      throw e;
+    }
+    // Drop any subscriptions left over from a previous link before adding new
+    // ones — otherwise every reconnect stacks another notification listener
+    // and the same beat gets fanned out once per past connection.
+    this.clearSubscriptions();
     this.device = device;
+    this.lastDeviceId = deviceId;
     this.subscribeToNotifications();
     this.watchForDisconnect();
     this.setState('connected');
   }
 
   async disconnect(): Promise<void> {
-    this.clearReconnectTimer();
+    this.disconnecting = true;
+    try {
+      this.clearReconnectTimer();
+      this.reconnectStartedAt = null;
+      this.clearSubscriptions();
+      if (this.device) {
+        try {
+          await this.device.cancelConnection();
+        } catch {
+          /* ignore — already disconnected */
+        }
+      }
+      this.device = null;
+      this.lastDeviceId = null;
+      this.setState('disconnected');
+    } finally {
+      this.disconnecting = false;
+    }
+  }
+
+  private clearSubscriptions(): void {
     this.notifSub?.remove();
     this.notifSub = null;
-    if (this.device) {
-      try {
-        await this.device.cancelConnection();
-      } catch {
-        /* ignore — already disconnected */
-      }
-    }
-    this.device = null;
-    this.setState('disconnected');
+    this.disconnectSub?.remove();
+    this.disconnectSub = null;
   }
 
   state(): ConnectionState {
@@ -126,31 +216,12 @@ export class BleDoppler implements DopplerClient {
   }
 
   /**
-   * RR intervals are preferred (SPEC.md §1.1). When RR is present, we reconstruct
-   * per-beat FHR values sequentially from the notification timestamp backwards.
-   * When RR is absent, fall back to the HR field directly.
+   * Expand a notification into samples and fan them out. The oldest-first
+   * ordering guaranteed by `hrmToSamples` is what the downstream buffer and
+   * extractor rely on — see the note on that function.
    */
-  private emitSamplesFromParsed(parsed: {
-    hr: number;
-    rrMs: number[];
-  }): void {
-    const now = Date.now();
-    if (parsed.rrMs.length > 0) {
-      // Reconstruct beat-by-beat timestamps: the most recent RR ends at `now`,
-      // the preceding one ends `rr_{k}` ms earlier, etc.
-      let cursor = now;
-      // Iterate newest-first so each sample timestamps at its own beat end.
-      for (let i = parsed.rrMs.length - 1; i >= 0; i--) {
-        const rr = parsed.rrMs[i]!;
-        const bpm = rr > 0 ? 60_000 / rr : parsed.hr;
-        const sample = makeSample(bpm, cursor, 'rr');
-        this.fanOutSample(sample);
-        cursor -= rr;
-      }
-    } else {
-      const interval = deriveIntervalFromHr(parsed.hr);
-      void interval; // informational; we stamp at `now`.
-      const sample = makeSample(parsed.hr, now, 'hr');
+  private emitSamplesFromParsed(parsed: ParsedHrm): void {
+    for (const sample of hrmToSamples(parsed, Date.now())) {
       this.fanOutSample(sample);
     }
   }
@@ -161,23 +232,32 @@ export class BleDoppler implements DopplerClient {
 
   private watchForDisconnect(): void {
     if (!this.device) return;
-    this.device.onDisconnected(() => {
+    this.disconnectSub = this.device.onDisconnected(() => {
+      // A user-initiated `disconnect()` also lands here via cancelConnection.
+      // Don't fight the user by reconnecting.
+      if (this.disconnecting) return;
       this.setState('disconnected');
       this.scheduleReconnect();
     });
   }
 
   private scheduleReconnect(): void {
-    const deviceId = this.device?.id;
-    if (!deviceId) return;
+    const deviceId = this.lastDeviceId;
+    if (deviceId === null) return;
     if (this.reconnectStartedAt === null) this.reconnectStartedAt = Date.now();
     const elapsed = Date.now() - this.reconnectStartedAt;
     if (elapsed > RECONNECT_CEILING_MS) {
+      // Give up. Settle on a terminal state so the UI stops implying that a
+      // reconnect is still in progress.
       this.clearReconnectTimer();
       this.reconnectStartedAt = null;
+      this.setState('disconnected');
       return;
     }
+    this.clearReconnectTimer();
     this.reconnectTimer = setTimeout(async () => {
+      this.reconnectTimer = null;
+      if (this.disconnecting) return;
       try {
         await this.connect(deviceId);
         this.reconnectStartedAt = null;

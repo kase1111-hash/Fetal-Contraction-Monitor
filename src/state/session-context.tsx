@@ -23,9 +23,9 @@ import React, {
 import { FhrBuffer } from '../ble/fhr-buffer';
 import { AccelDetector, type RawAccelSample } from '../detection/accelerometer';
 import { MERGE_WINDOW_S, applyFhrConfirmation } from '../detection/fusion';
-import { AUTO_SAVE_INTERVAL_MS } from '../constants';
+import { AUTO_SAVE_INTERVAL_MS, BASELINE_WINDOW } from '../constants';
 import { ContractionQueue } from './contraction-queue';
-import { sessionReducer } from './session-reducer';
+import { sessionReducer, type ContractionEdit } from './session-reducer';
 import { SessionStore } from '../storage/session-store';
 import { MemoryKvStore } from '../storage/kv';
 import { StudyRecorder } from '../study/raw-capture';
@@ -51,13 +51,31 @@ export interface SessionContextValue {
 
   /** Remove a contraction from the session (user correction). */
   deleteContraction(id: string): void;
-  /** Edit a contraction — adjust peak time, quality, etc. */
-  updateContraction(id: string, patch: Partial<ContractionResponse>): void;
-  /** Insert a manual contraction at a user-chosen time (long-press timeline). */
+  /**
+   * Apply a user correction to a contraction. Limited to annotation fields —
+   * extracted measurements and the peak time are not editable. See
+   * `ContractionEdit` in session-reducer.ts for why.
+   */
+  updateContraction(id: string, patch: ContractionEdit): void;
+  /**
+   * Insert a contraction the detector missed, at a user-chosen peak time.
+   *
+   * Goes through the normal extraction queue, so features are measured from
+   * the FHR buffer rather than invented. That also means `peakMs` must be
+   * recent enough that its response window is still buffered (120 s) — a time
+   * further back than that yields a rejected extraction and no contraction.
+   */
   insertContractionAt(peakMs: number): void;
 
   /** Load completed sessions from storage. Returns newest-first. */
   loadHistory(): Promise<LaborSession[]>;
+
+  /**
+   * Replace the current session with a set of pre-extracted responses
+   * (simulation mode). Starts a fresh session and adds each response in order,
+   * so status, baseline and trend all recompute exactly as they would live.
+   */
+  loadSimulatedSession(responses: readonly ContractionResponse[]): void;
 
   // --- Phase 4: study mode ------------------------------------------------
 
@@ -87,8 +105,22 @@ export function SessionProvider({
   now,
   children,
 }: SessionProviderProps): React.ReactElement {
-  const clock = now ?? (() => Date.now());
-  const idGen = newId ?? defaultIdGenerator(clock);
+  // `clock` and `idGen` must keep a STABLE identity across renders. They are
+  // effect dependencies below, and this provider re-renders on every incoming
+  // FHR sample (1–4 Hz). A fresh closure per render would tear down and re-arm
+  // the 1 s extraction interval faster than it can ever fire, so no contraction
+  // would ever be extracted while a Doppler is streaming.
+  const nowRef = useRef<() => number>(now ?? Date.now);
+  nowRef.current = now ?? Date.now;
+  const clock = useCallback(() => nowRef.current(), []);
+
+  const newIdRef = useRef<(() => string) | undefined>(newId);
+  newIdRef.current = newId;
+  const fallbackIdGen = useRef(defaultIdGenerator(clock));
+  const idGen = useCallback(
+    () => (newIdRef.current ?? fallbackIdGen.current)(),
+    [],
+  );
 
   const store = useMemo(() => new SessionStore(kv ?? new MemoryKvStore()), [kv]);
   const buffer = useRef(new FhrBuffer());
@@ -113,14 +145,22 @@ export function SessionProvider({
     })();
   }, [store]);
 
-  // 30 s auto-save.
+  // Latest session in a ref, so the auto-save interval below can read it
+  // without re-arming every time the session object changes.
+  const sessionRef = useRef<LaborSession | null>(session);
+  sessionRef.current = session;
+
+  // 30 s auto-save of the in-progress session.
   useEffect(() => {
-    if (session === null) return;
     const h = setInterval(() => {
-      void store.saveCurrent(session);
+      const s = sessionRef.current;
+      // Ended sessions live in history; re-saving would restore them into the
+      // "current" slot and resurrect them on the next cold start.
+      if (s === null || s.endTime !== null) return;
+      void store.saveCurrent(s);
     }, AUTO_SAVE_INTERVAL_MS);
     return () => clearInterval(h);
-  }, [session, store]);
+  }, [store]);
 
   // Drain the extraction queue once per second. Applies FHR confirmation to
   // accel-sourced responses right after extraction.
@@ -144,6 +184,11 @@ export function SessionProvider({
     dispatch({ type: 'start', id: idGen(), at: clock() });
     buffer.current.clear();
     queue.current.clear();
+    // Drop signal state carried over from any previous session, so a peak
+    // half-formed in the old accelerometer history can't land in the new one.
+    accelDetector.current = new AccelDetector();
+    manualPeaks.current = [];
+    setPendingCount(0);
   }, [idGen, clock]);
 
   const endSession = useCallback(async () => {
@@ -202,7 +247,7 @@ export function SessionProvider({
   }, [clock]);
 
   const updateContraction = useCallback(
-    (id: string, patch: Partial<ContractionResponse>) => {
+    (id: string, patch: ContractionEdit) => {
       dispatch({ type: 'update-contraction', id, patch, at: clock() });
     },
     [clock],
@@ -211,6 +256,31 @@ export function SessionProvider({
   const loadHistory = useCallback(async () => {
     return store.loadHistory();
   }, [store]);
+
+  const loadSimulatedSession = useCallback(
+    (responses: readonly ContractionResponse[]) => {
+      // Date the session from the first contraction's baseline window so the
+      // elapsed-time readout matches the simulated trajectory.
+      const startAt =
+        responses.length > 0
+          ? responses[0]!.contractionPeakTime - BASELINE_WINDOW * 1000
+          : clock();
+      dispatch({ type: 'start', id: idGen(), at: startAt });
+      buffer.current.clear();
+      queue.current.clear();
+      accelDetector.current = new AccelDetector();
+      manualPeaks.current = [];
+      setPendingCount(0);
+      for (const response of responses) {
+        dispatch({
+          type: 'add-contraction',
+          response,
+          at: response.contractionPeakTime,
+        });
+      }
+    },
+    [clock, idGen],
+  );
 
   const insertContractionAt = useCallback(
     (peakMs: number) => {
@@ -226,13 +296,14 @@ export function SessionProvider({
     [],
   );
 
-  // Save-after-add. Use an effect on contraction count so we persist once
-  // every time a new contraction lands.
-  const count = session?.contractions.length ?? 0;
+  // Save-after-change, so a new contraction is persisted immediately rather
+  // than waiting for the 30 s timer. Ended sessions are skipped: `endSession`
+  // has already moved them into history and cleared the current slot, and
+  // re-saving here would resurrect them on the next cold start.
   useEffect(() => {
-    if (session === null) return;
+    if (session === null || session.endTime !== null) return;
     void store.saveCurrent(session);
-  }, [count, session, store]);
+  }, [session, store]);
 
   const value: SessionContextValue = {
     session,
@@ -247,6 +318,7 @@ export function SessionProvider({
     updateContraction,
     insertContractionAt,
     loadHistory,
+    loadSimulatedSession,
     studyMode,
     setStudyMode,
     studyRecorder: studyRecorder.current,

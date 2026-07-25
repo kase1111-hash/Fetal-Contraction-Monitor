@@ -3,7 +3,7 @@
  * Reference: SPEC.md §2.2.
  */
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { CTX_MIN_DISTANCE } from '../constants';
 
@@ -14,7 +14,14 @@ export interface ContractionButtonProps {
 }
 
 export function ContractionButton({ onPress, now }: ContractionButtonProps): React.ReactElement {
-  const clock = now ?? (() => Date.now());
+  // Stable identity: this button lives on the Monitor screen, which re-renders
+  // on every incoming FHR sample. A fresh closure per render would re-arm the
+  // cooldown ticker below faster than its 250 ms period, leaving the button
+  // stuck on COOLDOWN forever.
+  const nowRef = useRef<() => number>(now ?? Date.now);
+  nowRef.current = now ?? Date.now;
+  const clock = useCallback(() => nowRef.current(), []);
+
   const lastPressedRef = useRef<number | null>(null);
   const [remaining, setRemaining] = useState(0);
 

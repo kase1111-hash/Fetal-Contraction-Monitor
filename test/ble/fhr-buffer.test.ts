@@ -61,3 +61,42 @@ describe('FhrBuffer', () => {
     expect(buf.size()).toBe(0);
   });
 });
+
+describe('FhrBuffer ordering', () => {
+  test('an out-of-order push is placed, not appended', () => {
+    const buf = new FhrBuffer();
+    buf.push(makeSample(140, t0, 'rr'));
+    buf.push(makeSample(150, t0 + 2000, 'rr'));
+    buf.push(makeSample(145, t0 + 1000, 'rr')); // arrives late
+
+    const ts = buf.all().map((s) => s.timestamp);
+    expect(ts).toEqual([t0, t0 + 1000, t0 + 2000]);
+    expect(buf.all().map((s) => s.fhr)).toEqual([140, 145, 150]);
+  });
+
+  test('slice still works after an out-of-order push', () => {
+    const buf = new FhrBuffer();
+    buf.push(makeSample(140, t0, 'rr'));
+    buf.push(makeSample(150, t0 + 3000, 'rr'));
+    buf.push(makeSample(145, t0 + 1000, 'rr'));
+    // Without ordered insertion, slice's early `break` would stop at t0+3000
+    // and miss the late sample entirely.
+    expect(buf.slice(t0, t0 + 2000).map((s) => s.fhr)).toEqual([140, 145]);
+  });
+
+  test('latestValid returns the newest sample, not the last pushed', () => {
+    const buf = new FhrBuffer();
+    buf.push(makeSample(150, t0 + 2000, 'rr'));
+    buf.push(makeSample(145, t0 + 1000, 'rr'));
+    expect(buf.latestValid()!.timestamp).toBe(t0 + 2000);
+  });
+
+  test('trim uses the newest timestamp, not the last pushed one', () => {
+    const buf = new FhrBuffer();
+    buf.push(makeSample(140, t0, 'rr'));
+    buf.push(makeSample(150, t0 + 130_000, 'rr'));
+    // A late straggler must not resurrect the 120 s horizon.
+    buf.push(makeSample(145, t0 + 129_000, 'rr'));
+    expect(buf.all().every((s) => s.timestamp >= t0 + 130_000 - 120_000)).toBe(true);
+  });
+});

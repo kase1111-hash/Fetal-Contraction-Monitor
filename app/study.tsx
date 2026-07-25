@@ -11,7 +11,7 @@
  * it's off, the screen explains how to enable it.
  */
 
-import React, { useMemo, useState } from 'react';
+import React, { useState } from 'react';
 import {
   Pressable,
   ScrollView,
@@ -48,13 +48,15 @@ export default function StudyScreen(): React.ReactElement {
 
   const consumerStream = studyRecorder.stream('consumer-doppler');
 
-  const counts = useMemo(() => {
-    return {
-      consumerSamples: consumerStream?.samples.length ?? 0,
-      consumerDetections: consumerStream?.detections.length ?? 0,
-      clinicalSamples: clinical?.length ?? 0,
-    };
-  }, [consumerStream, clinical]);
+  // Read straight through on every render — not memoised. `consumerStream` is a
+  // live object whose arrays are mutated in place by the recorder, so its
+  // identity never changes and a memo keyed on it would freeze the counters at
+  // whatever they were the first time the stream existed.
+  const counts = {
+    consumerSamples: consumerStream?.samples.length ?? 0,
+    consumerDetections: consumerStream?.detections.length ?? 0,
+    clinicalSamples: clinical?.length ?? 0,
+  };
 
   function importClinical(): void {
     if (csvText.trim() === '') {

@@ -1,4 +1,4 @@
-import { sessionReducer } from '../../src/state/session-reducer';
+import { sessionReducer, type ContractionEdit } from '../../src/state/session-reducer';
 import { MIN_CONTRACTIONS } from '../../src/constants';
 import type { ContractionResponse } from '../../src/types';
 
@@ -108,27 +108,113 @@ describe('sessionReducer', () => {
     expect(changedByBad).toBeDefined();
   });
 
-  test('update-contraction re-orders chronologically on timestamp change', () => {
-    let s = sessionReducer(null, { type: 'start', id: 'a', at: 0 });
-    s = sessionReducer(s, {
-      type: 'add-contraction',
-      response: ctx('c1', 30),
-      at: 1,
+  describe('update-contraction', () => {
+    function twoContractions(): ReturnType<typeof sessionReducer> {
+      let s = sessionReducer(null, { type: 'start', id: 'a', at: 0 });
+      s = sessionReducer(s, { type: 'add-contraction', response: ctx('c1', 30), at: 1 });
+      s = sessionReducer(s, { type: 'add-contraction', response: ctx('c2', 32), at: 2 });
+      return s;
+    }
+
+    test('applies an annotation edit to the addressed contraction only', () => {
+      let s = twoContractions();
+      s = sessionReducer(s, {
+        type: 'update-contraction',
+        id: 'c1',
+        patch: { qualityGrade: 'poor', detectionConfidence: 0.4 },
+        at: 3,
+      });
+      const [c1, c2] = s!.contractions;
+      expect(c1!.qualityGrade).toBe('poor');
+      expect(c1!.detectionConfidence).toBeCloseTo(0.4);
+      expect(c2!.qualityGrade).toBe('good');
+      expect(c2!.detectionConfidence).toBe(1);
     });
-    s = sessionReducer(s, {
-      type: 'add-contraction',
-      response: ctx('c2', 32),
-      at: 2,
+
+    test('leaves extracted measurements untouched', () => {
+      let s = twoContractions();
+      const before = { ...s!.contractions[0]! };
+      s = sessionReducer(s, {
+        type: 'update-contraction',
+        id: 'c1',
+        patch: { qualityGrade: 'fair' },
+        at: 3,
+      });
+      const after = s!.contractions[0]!;
+      expect(after.contractionPeakTime).toBe(before.contractionPeakTime);
+      expect(after.baselineFHR).toBe(before.baselineFHR);
+      expect(after.nadirDepth).toBe(before.nadirDepth);
+      expect(after.nadirTiming).toBe(before.nadirTiming);
+      expect(after.recoveryTime).toBe(before.recoveryTime);
+      expect(after.responseArea).toBe(before.responseArea);
+      expect(after.fhrQuality).toBe(before.fhrQuality);
     });
-    // Push c1's peak time after c2 — session must reorder.
-    s = sessionReducer(s, {
-      type: 'update-contraction',
-      id: 'c1',
-      patch: { contractionPeakTime: 999 },
-      at: 3,
+
+    test('ignores non-editable fields forced through an untyped caller', () => {
+      let s = twoContractions();
+      const before = { ...s!.contractions[0]! };
+      // The ContractionEdit type rejects these at compile time; the reducer
+      // must also drop them at runtime, so a cast or a JS caller can't
+      // desynchronise a record from the samples it was measured from.
+      const smuggled = {
+        contractionPeakTime: 999,
+        recoveryTime: 1,
+        nadirDepth: -99,
+        qualityGrade: 'poor',
+      } as unknown as ContractionEdit;
+      s = sessionReducer(s, {
+        type: 'update-contraction',
+        id: 'c1',
+        patch: smuggled,
+        at: 3,
+      });
+      const after = s!.contractions[0]!;
+      expect(after.qualityGrade).toBe('poor'); // the allowed field applied
+      expect(after.contractionPeakTime).toBe(before.contractionPeakTime);
+      expect(after.recoveryTime).toBe(before.recoveryTime);
+      expect(after.nadirDepth).toBe(before.nadirDepth);
+      // Order is preserved because peak times cannot move.
+      expect(s!.contractions.map((c) => c.id)).toEqual(['c1', 'c2']);
     });
-    const ids = s!.contractions.map((c) => c.id);
-    expect(ids).toEqual(['c2', 'c1']);
+
+    test('clamps detectionConfidence into [0, 1]', () => {
+      let s = twoContractions();
+      s = sessionReducer(s, {
+        type: 'update-contraction',
+        id: 'c1',
+        patch: { detectionConfidence: 5 },
+        at: 3,
+      });
+      expect(s!.contractions[0]!.detectionConfidence).toBe(1);
+
+      s = sessionReducer(s, {
+        type: 'update-contraction',
+        id: 'c1',
+        patch: { detectionConfidence: -2 },
+        at: 4,
+      });
+      expect(s!.contractions[0]!.detectionConfidence).toBe(0);
+
+      s = sessionReducer(s, {
+        type: 'update-contraction',
+        id: 'c1',
+        patch: { detectionConfidence: Number.NaN },
+        at: 5,
+      });
+      expect(s!.contractions[0]!.detectionConfidence).toBe(0);
+    });
+
+    test('an unknown id is a no-op', () => {
+      let s = twoContractions();
+      const before = s!.contractions.map((c) => c.qualityGrade);
+      s = sessionReducer(s, {
+        type: 'update-contraction',
+        id: 'nope',
+        patch: { qualityGrade: 'poor' },
+        at: 3,
+      });
+      expect(s!.contractions.map((c) => c.qualityGrade)).toEqual(before);
+    });
   });
 
   test('hydrate replaces state wholesale including baseline', () => {

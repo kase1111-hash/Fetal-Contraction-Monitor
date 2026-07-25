@@ -30,15 +30,30 @@ export class FhrBuffer {
     this.events = events;
   }
 
-  /** Append a sample and evict anything older than FHR_BUFFER_SECONDS. */
+  /**
+   * Insert a sample and evict anything older than FHR_BUFFER_SECONDS.
+   *
+   * Samples are kept in ascending timestamp order. Almost always that means a
+   * plain append, but a BLE notification carrying several RR intervals expands
+   * into beats that can interleave with what is already buffered, and every
+   * consumer (`slice`, `latestValid`, `extractResponse`'s trapezoidal
+   * integration) assumes ascending order. So an out-of-order sample is placed
+   * rather than appended.
+   */
   push(sample: FHRSample): void {
     const prev = this.samples.length > 0 ? this.samples[this.samples.length - 1]! : null;
     if (prev !== null && isGap(prev, sample)) {
       const gapSeconds = (sample.timestamp - prev.timestamp) / 1000;
       this.events.onGap?.(gapSeconds, sample.timestamp);
     }
-    this.samples.push(sample);
-    this.trim(sample.timestamp);
+    if (prev === null || sample.timestamp >= prev.timestamp) {
+      this.samples.push(sample);
+    } else {
+      let i = this.samples.length - 1;
+      while (i > 0 && this.samples[i - 1]!.timestamp > sample.timestamp) i--;
+      this.samples.splice(i, 0, sample);
+    }
+    this.trim(this.samples[this.samples.length - 1]!.timestamp);
   }
 
   /** Evict samples older than (latestTimestamp − FHR_BUFFER_SECONDS). */

@@ -7,14 +7,13 @@
  */
 
 import React, { useState } from 'react';
-import { Pressable, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
 import { Link } from 'expo-router';
 
 import { sessionToCsv } from '../../src/export/csv';
 import { exportSessionPdf } from '../../src/export/pdf';
 import {
-  scenarioParams,
-  generateFhrStream,
+  simulateResponses,
   type ScenarioKind,
 } from '../../src/simulation/scenarios';
 import { useSession } from '../../src/state/session-context';
@@ -22,13 +21,13 @@ import { useSession } from '../../src/state/session-context';
 export default function SettingsScreen(): React.ReactElement {
   const {
     session,
-    startSession,
-    recordDetection,
-    recordFhrSample,
+    loadSimulatedSession,
     studyMode,
     setStudyMode,
   } = useSession();
   const [note, setNote] = useState<string | null>(null);
+
+  const sessionRunning = session !== null && session.endTime === null;
 
   async function exportCsv(): Promise<void> {
     if (session === null || session.contractions.length === 0) {
@@ -58,18 +57,35 @@ export default function SettingsScreen(): React.ReactElement {
     }
   }
 
+  function loadScenario(kind: ScenarioKind): void {
+    const responses = simulateResponses(kind);
+    loadSimulatedSession(responses);
+    setNote(
+      `Loaded "${kind}" — ${responses.length} contractions. See the Monitor tab.`,
+    );
+  }
+
   function runSimulation(kind: ScenarioKind): void {
-    startSession();
-    const n = 15;
-    const now = Date.now();
-    for (let k = 0; k < n; k++) {
-      const peak = now + k * 2_000; // compressed 2 s per contraction
-      const params = scenarioParams(kind, k, n);
-      const samples = generateFhrStream(params, peak);
-      for (const s of samples) recordFhrSample(s);
-      recordDetection({ peakTimestamp: peak, method: 'manual', confidence: 1 });
+    // Simulation replaces whatever session is open. Losing a live labor
+    // recording to a mis-tap on a demo button is not a recoverable mistake,
+    // so make it deliberate.
+    if (sessionRunning) {
+      Alert.alert(
+        'Discard the current session?',
+        'A session is in progress. Loading a simulation will replace it, and ' +
+          'it has not been saved to history.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Discard and simulate',
+            style: 'destructive',
+            onPress: () => loadScenario(kind),
+          },
+        ],
+      );
+      return;
     }
-    setNote(`Simulating "${kind}"… watch the Monitor tab.`);
+    loadScenario(kind);
   }
 
   return (

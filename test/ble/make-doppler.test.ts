@@ -1,5 +1,6 @@
 import { createDopplerClient } from '../../src/ble/make-doppler';
 import { FakeDoppler } from '../../src/ble/fake-doppler';
+import { BleDoppler } from '../../src/ble/doppler';
 import type { DopplerClient } from '../../src/ble/doppler-client';
 
 /** Minimal DopplerClient stub for injection. */
@@ -64,5 +65,21 @@ describe('createDopplerClient', () => {
     const devices = await client.scan();
     expect(devices.length).toBeGreaterThanOrEqual(1);
     expect(client.state()).toBe('idle');
+  });
+});
+
+describe('createDopplerClient — real default factory', () => {
+  // `doppler.ts` now loads under Node (it requires react-native-ble-plx lazily
+  // so its state machine can be unit-tested). These guard the consequence:
+  // constructing the real client must still fail without the native module, so
+  // the app keeps degrading to FakeDoppler instead of booting a dead transport.
+  test('falls back to FakeDoppler when native BLE is absent', () => {
+    const { client, isReal } = createDopplerClient();
+    expect(isReal).toBe(false);
+    expect(client).toBeInstanceOf(FakeDoppler);
+  });
+
+  test('BleDoppler with no injected manager throws outside the RN runtime', () => {
+    expect(() => new BleDoppler()).toThrow();
   });
 });

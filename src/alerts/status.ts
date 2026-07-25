@@ -123,8 +123,10 @@ export function determineStatus(inputs: StatusInputs): StatusResult {
         `last5 ${features.recoveryLast5Mean.toFixed(1)} ≥ ${thresholds.yellow.toFixed(1)}`,
       );
     }
-    if (features.nadirAcceleration > 0) {
-      reasons.push(`nadirAccel ${features.nadirAcceleration.toFixed(2)} > 0`);
+    if (features.nadirAcceleration > NADIR_ACCEL_EPS) {
+      reasons.push(
+        `nadirAccel ${features.nadirAcceleration.toFixed(2)} > ${NADIR_ACCEL_EPS}`,
+      );
     }
     // Reset persistence counter — we dropped out of red-eligibility.
     return { status: 'yellow', redPersistenceCount: 0, reasons };
