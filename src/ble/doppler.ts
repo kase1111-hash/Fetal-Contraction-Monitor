@@ -8,12 +8,13 @@
  * The wrapper implements DopplerClient so the rest of the app is agnostic to
  * whether it's running against a real device or FakeDoppler.
  *
- * This module only compiles when react-native-ble-plx is installed and the
- * app is running inside the Expo / React Native runtime — it is not imported
- * by unit tests.
+ * react-native-ble-plx is required lazily, and the transport is described here
+ * by the narrow structural interfaces below rather than by that package's
+ * types. That keeps this module importable under plain Node, so the connect /
+ * disconnect / reconnect state machine — which is safety-relevant and cannot
+ * be exercised on a simulator — is unit-testable against a fake transport.
  */
 
-import { BleManager, Device, Subscription } from 'react-native-ble-plx';
 import { Buffer } from 'buffer';
 
 import { hrmToSamples, parseHrm, type ParsedHrm } from './parse-hrm';
@@ -31,11 +32,65 @@ const HEART_RATE_MEASUREMENT_UUID = '00002a37-0000-1000-8000-00805f9b34fb';
 const RECONNECT_INTERVAL_MS = 5_000;
 const RECONNECT_CEILING_MS = 2 * 60 * 1000;
 
+// --- Structural view of the transport ---------------------------------------
+// Only the members this client actually touches. `react-native-ble-plx`'s real
+// BleManager/Device satisfy these; so does a test fake.
+
+export interface BleSubscriptionLike {
+  remove(): void;
+}
+
+export interface BleCharacteristicLike {
+  /** Base64-encoded characteristic value. */
+  value: string | null;
+}
+
+export interface BleAdvertisedDeviceLike {
+  id: string;
+  name: string | null;
+  rssi: number | null;
+}
+
+export interface BleDeviceLike extends BleAdvertisedDeviceLike {
+  discoverAllServicesAndCharacteristics(): Promise<unknown>;
+  monitorCharacteristicForService(
+    serviceUUID: string,
+    characteristicUUID: string,
+    listener: (
+      error: unknown,
+      characteristic: BleCharacteristicLike | null,
+    ) => void,
+  ): BleSubscriptionLike;
+  cancelConnection(): Promise<unknown>;
+  onDisconnected(listener: (error: unknown) => void): BleSubscriptionLike;
+}
+
+export interface BleManagerLike {
+  startDeviceScan(
+    serviceUUIDs: string[] | null,
+    options: unknown,
+    listener: (error: unknown, device: BleAdvertisedDeviceLike | null) => void,
+  ): void;
+  stopDeviceScan(): void;
+  connectToDevice(deviceId: string): Promise<BleDeviceLike>;
+}
+
+/**
+ * Construct the real native manager. Throws when the native module is absent
+ * (Expo Go, web, node) — `make-doppler.ts` catches that and falls back to
+ * FakeDoppler.
+ */
+function defaultManager(): BleManagerLike {
+  const { BleManager } =
+    require('react-native-ble-plx') as typeof import('react-native-ble-plx');
+  return new BleManager() as unknown as BleManagerLike;
+}
+
 export class BleDoppler implements DopplerClient {
-  private readonly manager: BleManager;
-  private device: Device | null = null;
-  private notifSub: Subscription | null = null;
-  private disconnectSub: Subscription | null = null;
+  private readonly manager: BleManagerLike;
+  private device: BleDeviceLike | null = null;
+  private notifSub: BleSubscriptionLike | null = null;
+  private disconnectSub: BleSubscriptionLike | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectStartedAt: number | null = null;
   /** Device we should reconnect to; survives `device` being cleared. */
@@ -52,8 +107,8 @@ export class BleDoppler implements DopplerClient {
   private sampleHandlers: Array<(s: FHRSample) => void> = [];
   private stateHandlers: Array<(s: ConnectionState) => void> = [];
 
-  constructor(manager?: BleManager) {
-    this.manager = manager ?? new BleManager();
+  constructor(manager?: BleManagerLike) {
+    this.manager = manager ?? defaultManager();
   }
 
   async scan(timeoutMs = 8000): Promise<DiscoveredDevice[]> {
@@ -74,8 +129,16 @@ export class BleDoppler implements DopplerClient {
 
   async connect(deviceId: string): Promise<void> {
     this.setState('connecting');
-    const device = await this.manager.connectToDevice(deviceId);
-    await device.discoverAllServicesAndCharacteristics();
+    let device: BleDeviceLike;
+    try {
+      device = await this.manager.connectToDevice(deviceId);
+      await device.discoverAllServicesAndCharacteristics();
+    } catch (e) {
+      // Leaving the state at 'connecting' would strand every screen showing
+      // "Connecting…" forever for a link that is not coming back.
+      this.setState('disconnected');
+      throw e;
+    }
     // Drop any subscriptions left over from a previous link before adding new
     // ones — otherwise every reconnect stacks another notification listener
     // and the same beat gets fanned out once per past connection.
@@ -184,8 +247,11 @@ export class BleDoppler implements DopplerClient {
     if (this.reconnectStartedAt === null) this.reconnectStartedAt = Date.now();
     const elapsed = Date.now() - this.reconnectStartedAt;
     if (elapsed > RECONNECT_CEILING_MS) {
+      // Give up. Settle on a terminal state so the UI stops implying that a
+      // reconnect is still in progress.
       this.clearReconnectTimer();
       this.reconnectStartedAt = null;
+      this.setState('disconnected');
       return;
     }
     this.clearReconnectTimer();
