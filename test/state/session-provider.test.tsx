@@ -82,6 +82,68 @@ describe('SessionProvider — live Doppler stream', () => {
   });
 });
 
+describe('SessionProvider — inserting a missed contraction', () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  test('extracts features from the buffer rather than inventing them', () => {
+    const renderer = mount(new MemoryKvStore());
+    act(() => api.startSession());
+
+    const t0 = Date.now();
+    // 40 s of baseline, then a dip, then recovery — all still inside the
+    // 120 s ring buffer when we go back and mark the peak.
+    const peak = t0 + 40_000;
+    while (Date.now() < t0 + 110_000) {
+      const dt = (Date.now() - peak) / 1000;
+      const dip = dt >= 0 && dt < 20 ? -25 : 0;
+      step(500, 140 + dip);
+    }
+
+    act(() => api.insertContractionAt(peak));
+    expect(api.pendingCount).toBe(1);
+
+    // The response window closed long ago, so the next drain extracts it.
+    step(500, 140);
+    step(500, 140);
+
+    expect(api.session?.contractions).toHaveLength(1);
+    const c = api.session!.contractions[0]!;
+    expect(c.contractionPeakTime).toBe(peak);
+    expect(c.detectionMethod).toBe('manual');
+    // Measured, not fabricated: the dip we fed in is what comes back.
+    expect(c.baselineFHR).toBeCloseTo(140, 0);
+    expect(c.nadirDepth).toBeLessThan(-20);
+    expect(c.recoveryTime).toBeGreaterThan(0);
+
+    act(() => renderer.unmount());
+  });
+
+  test('records nothing when the chosen time has aged out of the buffer', () => {
+    const renderer = mount(new MemoryKvStore());
+    act(() => api.startSession());
+
+    const t0 = Date.now();
+    while (Date.now() < t0 + 40_000) step(500, 140);
+
+    // Well outside the 120 s buffer — there are no samples to measure.
+    act(() => api.insertContractionAt(t0 - 200_000));
+    expect(api.pendingCount).toBe(1);
+
+    step(500, 140);
+    step(500, 140);
+
+    expect(api.session?.contractions ?? []).toHaveLength(0);
+    expect(api.pendingCount).toBe(0); // dropped, not stuck pending
+
+    act(() => renderer.unmount());
+  });
+});
+
 describe('SessionProvider — ending a session', () => {
   beforeEach(() => {
     jest.useFakeTimers();

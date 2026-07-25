@@ -25,7 +25,7 @@ import { AccelDetector, type RawAccelSample } from '../detection/accelerometer';
 import { MERGE_WINDOW_S, applyFhrConfirmation } from '../detection/fusion';
 import { AUTO_SAVE_INTERVAL_MS } from '../constants';
 import { ContractionQueue } from './contraction-queue';
-import { sessionReducer } from './session-reducer';
+import { sessionReducer, type ContractionEdit } from './session-reducer';
 import { SessionStore } from '../storage/session-store';
 import { MemoryKvStore } from '../storage/kv';
 import { StudyRecorder } from '../study/raw-capture';
@@ -51,9 +51,20 @@ export interface SessionContextValue {
 
   /** Remove a contraction from the session (user correction). */
   deleteContraction(id: string): void;
-  /** Edit a contraction — adjust peak time, quality, etc. */
-  updateContraction(id: string, patch: Partial<ContractionResponse>): void;
-  /** Insert a manual contraction at a user-chosen time (long-press timeline). */
+  /**
+   * Apply a user correction to a contraction. Limited to annotation fields —
+   * extracted measurements and the peak time are not editable. See
+   * `ContractionEdit` in session-reducer.ts for why.
+   */
+  updateContraction(id: string, patch: ContractionEdit): void;
+  /**
+   * Insert a contraction the detector missed, at a user-chosen peak time.
+   *
+   * Goes through the normal extraction queue, so features are measured from
+   * the FHR buffer rather than invented. That also means `peakMs` must be
+   * recent enough that its response window is still buffered (120 s) — a time
+   * further back than that yields a rejected extraction and no contraction.
+   */
   insertContractionAt(peakMs: number): void;
 
   /** Load completed sessions from storage. Returns newest-first. */
@@ -229,7 +240,7 @@ export function SessionProvider({
   }, [clock]);
 
   const updateContraction = useCallback(
-    (id: string, patch: Partial<ContractionResponse>) => {
+    (id: string, patch: ContractionEdit) => {
       dispatch({ type: 'update-contraction', id, patch, at: clock() });
     },
     [clock],
